@@ -125,7 +125,9 @@ uruguay_municipios <- st_read("municipios/snd_limmun.shp", quiet = TRUE, options
   )
 
 # Geometría Restante (Restos de Departamento)
+# Excluimos Montevideo de este cálculo ya que lo manejaremos como una sola pieza limpia al final
 munis_unidos <- uruguay_municipios %>%
+  filter(Depto_Limpio != "MONTEVIDEO") %>%
   group_by(Depto_Limpio_Orig) %>%
   summarise(geom = suppressWarnings(suppressMessages(st_union(st_geometry(.)))), .groups = "drop") %>%
   st_make_valid()
@@ -158,20 +160,33 @@ restos_mapa <- restos_mapa %>%
 names(restos_mapa)[names(restos_mapa) == attr(restos_mapa, "sf_column")] <- "geometry"
 st_geometry(restos_mapa) <- "geometry"
 
-names(uruguay_municipios)[names(uruguay_municipios) == attr(uruguay_municipios, "sf_column")] <- "geometry"
-st_geometry(uruguay_municipios) <- "geometry"
+# Preparar Municipios Reales (Excluyendo Montevideo para unirlo limpio después)
+uruguay_municipios_reales <- uruguay_municipios %>%
+  filter(Depto_Limpio != "MONTEVIDEO")
 
-# Agrupar municipios que puedan estar divididos en múltiples shapefiles o departamentos (ej. Cerro Chato)
-uruguay_municipios <- uruguay_municipios %>%
+names(uruguay_municipios_reales)[names(uruguay_municipios_reales) == attr(uruguay_municipios_reales, "sf_column")] <- "geometry"
+st_geometry(uruguay_municipios_reales) <- "geometry"
+
+uruguay_municipios_reales <- uruguay_municipios_reales %>%
   group_by(Depto_Limpio, Muni_Limpio) %>%
   summarise(geometry = suppressWarnings(suppressMessages(st_union(geometry))), .groups = "drop") %>%
   st_make_valid() %>%
   st_cast("MULTIPOLYGON")
 
-# Unir capa oficial con las zonas sin alcaldías usando dplyr bind_rows pero obligando la clase
+# Montevideo Limpio (usando la geometría del departamento directamente)
+montevideo_limpio <- uruguay_mapa %>%
+  filter(Depto_Limpio == "MONTEVIDEO") %>%
+  mutate(Muni_Limpio = "MONTEVIDEO") %>%
+  select(Depto_Limpio, Muni_Limpio)
+
+names(montevideo_limpio)[names(montevideo_limpio) == attr(montevideo_limpio, "sf_column")] <- "geometry"
+st_geometry(montevideo_limpio) <- "geometry"
+
+# Unir todo: Municipios Reales + Zonas Resto + Montevideo Limpio
 uruguay_municipios <- bind_rows(
-  uruguay_municipios %>% select(Depto_Limpio, Muni_Limpio),
-  restos_mapa %>% select(Depto_Limpio, Muni_Limpio)
+  uruguay_municipios_reales %>% select(Depto_Limpio, Muni_Limpio),
+  restos_mapa %>% select(Depto_Limpio, Muni_Limpio),
+  montevideo_limpio %>% select(Depto_Limpio, Muni_Limpio)
 ) %>% st_as_sf()
 
 # BBOX por departamento para zoom dinámico
@@ -601,7 +616,8 @@ server <- function(input, output, session) {
       if (new_id == "EXTERIOR") {
         rv$depto_hover <- NULL
       } else if (new_id != "INTERIOR") {
-        rv$depto_hover <- new_id
+        # Si el ID es el especial de Montevideo en modo municipal, mapearlo a MONTEVIDEO para el panel
+        rv$depto_hover <- if (new_id == "MONTEVIDEO_MUNI") "MONTEVIDEO" else new_id
       }
     }
   })
@@ -807,8 +823,8 @@ server <- function(input, output, session) {
       left_join(centroids, by = id_col) %>%
       filter(!is.na(lon))
 
-    # Excluir etiquetas de Montevideo si estamos en mapa municipal
-    if (is_muni) d_centr <- d_centr %>% filter(Muni_Limpio != "MONTEVIDEO")
+    # Excluir etiquetas de Montevideo si estamos en mapa municipal (Eliminado para mostrar Montevideo)
+    # if (is_muni) d_centr <- d_centr %>% filter(Muni_Limpio != "MONTEVIDEO")
 
     paleta <- colorNumeric(
       palette = c("#f2f4f7", col_motivo),
@@ -838,13 +854,20 @@ server <- function(input, output, session) {
 
     # Separar polígonos de Resto y Polígonos Reales para desactivar el hover en los Restos
     if (is_muni) {
-      # Excluir Montevideo completamente de la vista de municipios
+      # Al quitar & Muni_Limpio != "MONTEVIDEO", permitimos que aparezca en una de las dos capas
       d_reales <- d %>% filter(!grepl("RESTO DE", Muni_Limpio) & Muni_Limpio != "MONTEVIDEO")
       d_restos <- d %>% filter(grepl("RESTO DE", Muni_Limpio) & Muni_Limpio != "MONTEVIDEO")
+      d_mvd <- d %>% filter(Muni_Limpio == "MONTEVIDEO")
 
-      # Primero agregar restos, SIN hover
+      # 1. Restos (Fondo, sin hover)
       map_out <- map_out %>%
         addPolygons(data = d_restos, layerId = ~Muni_Limpio, fillColor = ~ paleta(FillVar), fillOpacity = 0.95, color = "#000000", weight = 0.8) %>%
+        # 2. Montevideo (ID especial para hatching, con hover)
+        addPolygons(
+          data = d_mvd, layerId = "MONTEVIDEO_MUNI", fillColor = "white", fillOpacity = 1, color = "#000000", weight = 0.8,
+          highlightOptions = highlightOptions(weight = 4, color = "#e67e22", bringToFront = TRUE)
+        ) %>%
+        # 3. Municipios reales (Frente, con hover)
         addPolygons(
           data = d_reales, layerId = ~Muni_Limpio, fillColor = ~ paleta(FillVar), fillOpacity = 0.95, color = "#000000", weight = 0.8,
           highlightOptions = highlightOptions(weight = 4, color = "#e67e22", bringToFront = TRUE)
@@ -861,7 +884,71 @@ server <- function(input, output, session) {
       addLabelOnlyMarkers(
         data = d_centr, lng = ~lon, lat = ~lat, label = ~ as.character(FillVar),
         labelOptions = labelOptions(noHide = TRUE, textOnly = TRUE, direction = "center", style = list("color" = "#e67e22", "font-weight" = "bold", "font-size" = "15px", "text-shadow" = "1px 1px 1px white"))
-      )
+      ) %>%
+      htmlwidgets::onRender("
+        function(el, x) {
+          var map = this;
+          var svg = el.querySelector('svg');
+          if (!svg) return;
+
+          function addPatterns() {
+            if (!document.getElementById('pattern-hatch')) {
+              var defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+              var pattern = document.createElementNS('http://www.w3.org/2000/svg', 'pattern');
+              pattern.setAttribute('id', 'pattern-hatch');
+              pattern.setAttribute('patternUnits', 'userSpaceOnUse');
+              pattern.setAttribute('width', '8');
+              pattern.setAttribute('height', '8');
+              pattern.setAttribute('patternTransform', 'rotate(45)');
+
+              var rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+              rect.setAttribute('width', '8');
+              rect.setAttribute('height', '8');
+              rect.setAttribute('fill', 'white');
+
+              var line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+              line.setAttribute('x1', '0'); line.setAttribute('y1', '0');
+              line.setAttribute('x2', '0'); line.setAttribute('y2', '8');
+              line.setAttribute('stroke', '#d9d9d9');
+              line.setAttribute('stroke-width', '2');
+
+              pattern.appendChild(rect);
+              pattern.appendChild(line);
+              defs.appendChild(pattern);
+              svg.appendChild(defs);
+            }
+          }
+
+          function applyHatch() {
+            map.eachLayer(function(layer) {
+              if (layer.options && layer.options.layerId === 'MONTEVIDEO_MUNI') {
+                if (layer._path) {
+                  layer._path.setAttribute('fill', 'url(#pattern-hatch)');
+                  layer._path.setAttribute('fill-opacity', '1');
+                }
+
+                // Asegurar que el patrón se mantenga incluso después de eventos de Leaflet
+                layer.on('mouseover mousemove mouseout viewreset zoomend', function() {
+                   setTimeout(function() {
+                     if(layer._path) {
+                       layer._path.setAttribute('fill', 'url(#pattern-hatch)');
+                       layer._path.setAttribute('fill-opacity', '1');
+                     }
+                   }, 10);
+                });
+              }
+            });
+          }
+
+          addPatterns();
+          applyHatch();
+
+          // Re-aplicar cuando Leaflet redibuja los SVG (ej. al mover el mapa)
+          map.on('layeradd', function() {
+            applyHatch();
+          });
+        }
+      ")
   })
 
   output$panel_hover_info <- renderUI({
