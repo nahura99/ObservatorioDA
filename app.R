@@ -1,3 +1,7 @@
+################################################################################
+############################## OBSERVATORIO-DA #################################
+################################################################################
+
 # Cargar librerías necesarias
 packages <- c("shiny", "bslib", "shinyWidgets", "ggplot2", "sf", "dplyr", "stringr", "lubridate", "ggiraph", "shinycssloaders", "geouy", "leaflet", "shinyjs", "htmlwidgets", "waiter", "ggrepel")
 for (p in packages) {
@@ -69,7 +73,6 @@ df <- df %>%
     ),
     Depto_Limpio = limpiar_texto(DEPARTAMENTO),
     Muni_Limpio_Nom = limpiar_texto(MUNICIPIO),
-    Depto_Limpio = ifelse(Muni_Limpio_Nom == "CERRO CHATO", "TREINTA Y TRES", Depto_Limpio),
     Muni_Limpio_Nom = ifelse(Depto_Limpio == "MONTEVIDEO", "MONTEVIDEO", Muni_Limpio_Nom),
     Tiene_Expediente = as.integer(!is.na(`N° EXPEDIENTE`) & str_trim(`N° EXPEDIENTE`) != "")
   ) %>%
@@ -104,61 +107,30 @@ colores_motivos <- c(
 sf_use_s2(FALSE)
 uruguay_mapa <- load_geouy("Departamentos") %>%
   st_make_valid() %>%
-  st_simplify(dTolerance = 300, preserveTopology = TRUE) %>%
   st_transform(4326) %>%
   st_cast("MULTIPOLYGON") %>%
   st_make_valid() %>%
   mutate(Depto_Limpio = limpiar_texto(nombre))
 
+names(uruguay_mapa)[names(uruguay_mapa) == attr(uruguay_mapa, "sf_column")] <- "geometry"
+st_geometry(uruguay_mapa) <- "geometry"
+
 uruguay_municipios <- st_read("municipios/snd_limmun.shp", quiet = TRUE, options = "ENCODING=WINDOWS-1252") %>%
   st_make_valid() %>%
-  st_simplify(dTolerance = 0.002, preserveTopology = TRUE) %>%
   st_transform(4326) %>%
+  st_simplify(dTolerance = 0.0005, preserveTopology = TRUE) %>%
   st_cast("MULTIPOLYGON") %>%
   st_make_valid() %>%
   mutate(
     Muni_Limpio_Nom = limpiar_texto(municipio),
-    Depto_Limpio_Orig = limpiar_texto(depto),
-    Depto_Limpio = ifelse(Muni_Limpio_Nom == "CERRO CHATO", "TREINTA Y TRES", Depto_Limpio_Orig),
+    Depto_Limpio = limpiar_texto(depto),
     Muni_Limpio_Nom = ifelse(Depto_Limpio == "MONTEVIDEO", "MONTEVIDEO", Muni_Limpio_Nom),
     Muni_Limpio = ifelse(Depto_Limpio == "MONTEVIDEO", "MONTEVIDEO", paste0(Muni_Limpio_Nom, " (", Depto_Limpio, ")"))
   )
 
-# Geometría Restante (Restos de Departamento)
-# Excluimos Montevideo de este cálculo ya que lo manejaremos como una sola pieza limpia al final
-munis_unidos <- uruguay_municipios %>%
-  filter(Depto_Limpio != "MONTEVIDEO") %>%
-  group_by(Depto_Limpio_Orig) %>%
-  summarise(geom = suppressWarnings(suppressMessages(st_union(st_geometry(.)))), .groups = "drop") %>%
-  st_make_valid()
+# Nota: Ya no calculamos 'restos_mapa' geométricamente (st_difference),
+# usaremos el mapa departamental como base subyacente.
 
-restos_mapa <- uruguay_mapa %>%
-  filter(Depto_Limpio != "MONTEVIDEO") %>%
-  mutate(Muni_Limpio = paste("RESTO DE", Depto_Limpio))
-
-# Iterar de forma manual para evitar joins y list-columns complejos
-for (i in seq_len(nrow(restos_mapa))) {
-  depto <- restos_mapa$Depto_Limpio[i]
-  muni_union <- munis_unidos %>% filter(Depto_Limpio_Orig == depto)
-  if (nrow(muni_union) > 0) {
-    g_unida <- st_make_valid(st_geometry(muni_union)[[1]])
-    g_base <- st_make_valid(st_geometry(restos_mapa)[[i]])
-    if (!is.null(g_unida) && !is.null(g_base) && !st_is_empty(g_unida)) {
-      st_geometry(restos_mapa)[[i]] <- st_make_valid(suppressWarnings(st_difference(g_base, g_unida)))
-    }
-  }
-}
-
-restos_mapa <- restos_mapa %>%
-  st_collection_extract("POLYGON") %>%
-  st_cast("MULTIPOLYGON") %>%
-  st_make_valid() %>%
-  select(Depto_Limpio, Muni_Limpio)
-
-
-# Asegurar el mismo nombre en la columna de geometría para evitar que rbind omita la forma
-names(restos_mapa)[names(restos_mapa) == attr(restos_mapa, "sf_column")] <- "geometry"
-st_geometry(restos_mapa) <- "geometry"
 
 # Preparar Municipios Reales (Excluyendo Montevideo para unirlo limpio después)
 uruguay_municipios_reales <- uruguay_municipios %>%
@@ -182,10 +154,9 @@ montevideo_limpio <- uruguay_mapa %>%
 names(montevideo_limpio)[names(montevideo_limpio) == attr(montevideo_limpio, "sf_column")] <- "geometry"
 st_geometry(montevideo_limpio) <- "geometry"
 
-# Unir todo: Municipios Reales + Zonas Resto + Montevideo Limpio
+# Unir todo: Municipios Reales + Montevideo Limpio (Los 'Restos' se cubren con el fondo departamental)
 uruguay_municipios <- bind_rows(
   uruguay_municipios_reales %>% select(Depto_Limpio, Muni_Limpio),
-  restos_mapa %>% select(Depto_Limpio, Muni_Limpio),
   montevideo_limpio %>% select(Depto_Limpio, Muni_Limpio)
 ) %>% st_as_sf()
 
@@ -615,7 +586,8 @@ server <- function(input, output, session) {
     if (!is.null(new_id)) {
       if (new_id == "EXTERIOR") {
         rv$depto_hover <- NULL
-      } else if (new_id != "INTERIOR") {
+      } else {
+        # Ahora permitimos todos los IDs (Departamentos o Municipios)
         # Si el ID es el especial de Montevideo en modo municipal, mapearlo a MONTEVIDEO para el panel
         rv$depto_hover <- if (new_id == "MONTEVIDEO_MUNI") "MONTEVIDEO" else new_id
       }
@@ -633,6 +605,11 @@ server <- function(input, output, session) {
 
   observeEvent(input$btn_desel_all_deptos, {
     updateCheckboxGroupButtons(session, "filtro_deptos", selected = character(0))
+  })
+
+  # Ocultar indicador de carga cuando el mapa termina de procesarse en el cliente
+  observeEvent(input$mapa_listo, {
+    w_mapa$hide()
   })
 
   observeEvent(input$modo_vista, {
@@ -755,6 +732,37 @@ server <- function(input, output, session) {
       st_as_sf()
   })
 
+  # 2.6 Datos para el "RESTO" de cada departamento (No municipalizados + Indeterminados)
+  datos_restos <- reactive({
+    req(input$filtro_anio)
+    d_base <- datos_filtrados_motivo()
+    var_tooltip <- ifelse(input$filtro_motivo == "Todos los motivos", "MOTIVO_AGRUPADO", "MOTIVO")
+
+    # Filtrar por año
+    d <- d_base %>% filter(Anio >= as.character(input$filtro_anio[1]) & Anio <= as.character(input$filtro_anio[2]))
+
+    # Identificar nombres de municipios reales para filtrar
+    munis_reales <- unique(uruguay_municipios$Muni_Limpio)
+
+    # Agregación por Departamento para aquellos registros que NO son un municipio real
+    base <- d %>%
+      filter(!(Muni_Limpio %in% munis_reales)) %>%
+      group_by(Depto_Limpio) %>%
+      mutate(Total_Resto = n()) %>%
+      group_by(Depto_Limpio, !!sym(var_tooltip)) %>%
+      summarise(Cant_Sub = n(), Total_Resto = first(Total_Resto), Exp_Sub = sum(Tiene_Expediente, na.rm = T), .groups = "drop_last") %>%
+      mutate(Pct_Sub = round((Cant_Sub / Total_Resto) * 100, 1)) %>%
+      arrange(Depto_Limpio, desc(Pct_Sub)) %>%
+      group_by(Depto_Limpio) %>%
+      summarise(
+        D_Tot = first(Total_Resto), E_Tot = sum(Exp_Sub),
+        TooltipHTML = paste0("<div style='font-size:13px; margin-bottom:4px; line-height:1.3;'><b style='color:#002D62;'>", Pct_Sub, "%</b> - ", str_trunc(!!sym(var_tooltip), 100), "</div>", collapse = ""),
+        .groups = "drop"
+      )
+
+    return(base)
+  })
+
   # 3. Datos para la SERIE (Agregados por Depto y Año)
   datos_serie <- reactive({
     req(input$filtro_formato_serie)
@@ -799,12 +807,7 @@ server <- function(input, output, session) {
 
   output$mapa_interactivo <- renderLeaflet({
     w_mapa$show()
-    on.exit(
-      {
-        w_mapa$hide()
-      },
-      add = TRUE
-    )
+    # Ya no ocultamos aquí con on.exit, lo delegamos al evento 'mapa_listo' desde JS
 
     is_muni <- input$modo_vista == "MAPA MUNICIPAL"
     d <- if (is_muni) datos_municipios() else datos_mapa()
@@ -813,6 +816,7 @@ server <- function(input, output, session) {
 
     col_motivo <- colores_motivos[[input$filtro_motivo %||% "Todos los motivos"]]
     fill_var <- d$D_Tot
+    # Los indicadores numéricos siempre usan fill_var
     d <- d %>% mutate(FillVar = fill_var)
 
     d_centr <- d %>%
@@ -823,12 +827,32 @@ server <- function(input, output, session) {
       left_join(centroids, by = id_col) %>%
       filter(!is.na(lon))
 
-    # Excluir etiquetas de Montevideo si estamos en mapa municipal (Eliminado para mostrar Montevideo)
-    # if (is_muni) d_centr <- d_centr %>% filter(Muni_Limpio != "MONTEVIDEO")
+    # Datos y Paleta para el fondo departamental (siempre necesario como base)
+    d_restos_counts <- datos_restos() # Conteo por Depto_Limpio para zonas NO municipalizadas
 
-    paleta <- colorNumeric(
+    # En modo departamental usamos los totales, en municipal los restos
+    if (is_muni) {
+      d_depts_base <- uruguay_mapa %>%
+        left_join(d_restos_counts, by = "Depto_Limpio") %>%
+        mutate(
+          D_Tot = ifelse(is.na(D_Tot), 0, D_Tot),
+          E_Tot = ifelse(is.na(E_Tot), 0, E_Tot),
+          TooltipHTML = ifelse(is.na(TooltipHTML), "<div style='color:#999;font-size:12px;'>0 Registros</div>", TooltipHTML)
+        ) %>%
+        # Excluimos departamentos 100% municipalizados
+        filter(!Depto_Limpio %in% c("MONTEVIDEO", "CANELONES", "MALDONADO"))
+    } else {
+      d_depts_base <- datos_mapa()
+    }
+
+    # -------------------------------------------------------------------------
+    # PALETA UNIFICADA (Para que los colores sean comparables entre capas)
+    # -------------------------------------------------------------------------
+    max_global <- max(c(d$D_Tot, d_depts_base$D_Tot), na.rm = TRUE)
+
+    paleta_global <- colorNumeric(
       palette = c("#f2f4f7", col_motivo),
-      domain = c(0, max(fill_var, na.rm = T) + 0.1),
+      domain = c(0, max_global + 0.1),
       na.color = "#d9d9d9"
     )
 
@@ -846,36 +870,28 @@ server <- function(input, output, session) {
         layerId = "EXTERIOR", lng1 = -180, lat1 = -90, lng2 = 180, lat2 = 90,
         fillColor = "transparent", stroke = FALSE
       ) %>%
-      # Capa de fondo nacional (INTERIOR)
+      # Capa de fondo departamental (Actúa como 'Resto de departamento' en modo municipal)
       addPolygons(
-        data = uruguay_mapa, layerId = "INTERIOR", fillColor = "#FFFDE7", fillOpacity = 0.5, color = "#000000", weight = 1,
-        highlightOptions = NULL
+        data = d_depts_base, layerId = ~Depto_Limpio,
+        fillColor = ~ paleta_global(D_Tot),
+        fillOpacity = if (is_muni) 0.5 else 0.95,
+        color = "#000000", weight = 1,
+        highlightOptions = if (!is_muni) highlightOptions(weight = 4, color = "#e67e22", bringToFront = TRUE) else NULL
       )
 
-    # Separar polígonos de Resto y Polígonos Reales para desactivar el hover en los Restos
+    # Capas superiores adicionales (solo en modo municipal)
     if (is_muni) {
-      # Al quitar & Muni_Limpio != "MONTEVIDEO", permitimos que aparezca en una de las dos capas
-      d_reales <- d %>% filter(!grepl("RESTO DE", Muni_Limpio) & Muni_Limpio != "MONTEVIDEO")
-      d_restos <- d %>% filter(grepl("RESTO DE", Muni_Limpio) & Muni_Limpio != "MONTEVIDEO")
+      d_reales <- d %>% filter(Muni_Limpio != "MONTEVIDEO")
       d_mvd <- d %>% filter(Muni_Limpio == "MONTEVIDEO")
 
-      # 1. Restos (Fondo, sin hover)
       map_out <- map_out %>%
-        addPolygons(data = d_restos, layerId = ~Muni_Limpio, fillColor = ~ paleta(FillVar), fillOpacity = 0.95, color = "#000000", weight = 0.8) %>%
-        # 2. Montevideo (ID especial para hatching, con hover)
+        # 1. Montevideo (ID especial para hatching, sin highlight automático para evitar parpadeo)
         addPolygons(
-          data = d_mvd, layerId = "MONTEVIDEO_MUNI", fillColor = "white", fillOpacity = 1, color = "#000000", weight = 0.8,
-          highlightOptions = highlightOptions(weight = 4, color = "#e67e22", bringToFront = TRUE)
+          data = d_mvd, layerId = "MONTEVIDEO_MUNI", fillColor = ~ paleta_global(FillVar), fillOpacity = 1, color = "#000000", weight = 0.8
         ) %>%
-        # 3. Municipios reales (Frente, con hover)
+        # 2. Municipios reales (Frente, con hover)
         addPolygons(
-          data = d_reales, layerId = ~Muni_Limpio, fillColor = ~ paleta(FillVar), fillOpacity = 0.95, color = "#000000", weight = 0.8,
-          highlightOptions = highlightOptions(weight = 4, color = "#e67e22", bringToFront = TRUE)
-        )
-    } else {
-      map_out <- map_out %>%
-        addPolygons(
-          data = d, layerId = ~Depto_Limpio, fillColor = ~ paleta(FillVar), fillOpacity = 0.95, color = "#000000", weight = 0.8,
+          data = d_reales, layerId = ~Muni_Limpio, fillColor = ~ paleta_global(FillVar), fillOpacity = 1, color = "#000000", weight = 0.8,
           highlightOptions = highlightOptions(weight = 4, color = "#e67e22", bringToFront = TRUE)
         )
     }
@@ -927,14 +943,28 @@ server <- function(input, output, session) {
                   layer._path.setAttribute('fill-opacity', '1');
                 }
 
-                // Asegurar que el patrón se mantenga incluso después de eventos de Leaflet
+                // Manejar resaltado manualmente para evitar parpadeo azul
+                layer.on('mouseover', function(e) {
+                  if(layer._path) {
+                    layer._path.setAttribute('stroke', '#e67e22');
+                    layer._path.setAttribute('stroke-width', '4');
+                    layer.bringToFront();
+                  }
+                });
+
+                layer.on('mouseout', function(e) {
+                  if(layer._path) {
+                    layer._path.setAttribute('stroke', '#000000');
+                    layer._path.setAttribute('stroke-width', '0.8');
+                  }
+                });
+
+                // Asegurar que el patrón se mantenga estable
                 layer.on('mouseover mousemove mouseout viewreset zoomend', function() {
-                   setTimeout(function() {
-                     if(layer._path) {
-                       layer._path.setAttribute('fill', 'url(#pattern-hatch)');
-                       layer._path.setAttribute('fill-opacity', '1');
-                     }
-                   }, 10);
+                  if(layer._path) {
+                    layer._path.setAttribute('fill', 'url(#pattern-hatch)');
+                    layer._path.setAttribute('fill-opacity', '1');
+                  }
                 });
               }
             });
@@ -947,6 +977,9 @@ server <- function(input, output, session) {
           map.on('layeradd', function() {
             applyHatch();
           });
+
+          // Avisar al servidor que el renderizado inicial terminó
+          Shiny.setInputValue('mapa_listo', Math.random());
         }
       ")
   })
@@ -954,8 +987,9 @@ server <- function(input, output, session) {
   output$panel_hover_info <- renderUI({
     hover_id <- rv$depto_hover
     is_muni <- input$modo_vista == "MAPA MUNICIPAL"
-    d <- if (is_muni) datos_municipios() else datos_mapa()
-    id_col <- if (is_muni) "Muni_Limpio" else "Depto_Limpio"
+
+    # Siempre usamos datos_mapa para el resumen nacional (es el más completo)
+    d_nacional <- datos_mapa()
 
     if (is.null(hover_id) || hover_id == "") {
       if (is_muni) {
@@ -966,9 +1000,9 @@ server <- function(input, output, session) {
         )))
       }
 
-      # Resumen (Nacional o Departamental)
-      d_tot <- sum(d$D_Tot, na.rm = TRUE)
-      e_tot <- sum(d$E_Tot, na.rm = TRUE)
+      # Resumen Nacional
+      d_tot <- sum(d_nacional$D_Tot, na.rm = TRUE)
+      e_tot <- sum(d_nacional$E_Tot, na.rm = TRUE)
 
       d_raw <- df %>% filter(Anio >= as.character(input$filtro_anio[1]) & Anio <= as.character(input$filtro_anio[2]))
       if (input$filtro_motivo != "Todos los motivos") d_raw <- d_raw %>% filter(MOTIVO_AGRUPADO == input$filtro_motivo)
@@ -999,23 +1033,60 @@ server <- function(input, output, session) {
       )))
     }
 
-    d_hover <- d %>%
-      filter(.data[[id_col]] == hover_id) %>%
-      slice(1)
-    if (nrow(d_hover) > 0) {
-      HTML(paste0(
-        "<div style='background:white; border:1px solid #002D62; padding:15px; border-radius:10px; box-shadow:0 4px 12px rgba(0,0,0,0.1);'>",
-        "<h3 style='color:#002D62; margin-top:0;'>", d_hover[[id_col]], "</h3>",
-        "<div style='display:flex; justify-content:space-around; margin-bottom:15px; text-align:center;'>",
-        "<div><span style='font-size:0.8rem; color:#666;'>DENUNCIAS</span><br><b style='font-size:1.4rem;'>", d_hover$D_Tot, "</b></div>",
-        "<div><span style='font-size:0.8rem; color:#666;'>EXPEDIENTES</span><br><b style='font-size:1.4rem;'>", d_hover$E_Tot, "</b></div>",
-        "</div>",
-        "<hr style='margin:10px 0;'>",
-        "<div style='font-weight:bold; color:#555; margin-bottom:8px; font-size:0.9rem;'>Principales Motivos en el dpto:</div>",
-        d_hover$TooltipHTML,
-        "</div>"
-      ))
+    # Buscar datos específicos del territorio bajo el mouse
+    if (is_muni) {
+      # 1. Intentar Municipio
+      d_muni <- datos_municipios()
+      d_hover <- d_muni %>% filter(Muni_Limpio == hover_id)
+
+      if (nrow(d_hover) > 0) {
+        titulo <- d_hover$Muni_Limpio
+        v_d_tot <- d_hover$D_Tot
+        v_e_tot <- d_hover$E_Tot
+        v_tooltip <- d_hover$TooltipHTML
+      } else {
+        # 2. Intentar Departamento (Fondo) - Usamos el valor del "Resto"
+        d_restos <- datos_restos()
+        d_hover_restos <- d_restos %>% filter(Depto_Limpio == hover_id)
+
+        if (nrow(d_hover_restos) > 0) {
+          titulo <- paste0("<span style='font-size:0.85em;'>", toupper(hover_id), ": zonas no municipalizadas y capital departamental</span>")
+          v_d_tot <- d_hover_restos$D_Tot
+          v_e_tot <- d_hover_restos$E_Tot
+          v_tooltip <- d_hover_restos$TooltipHTML
+        } else {
+          # Caso borde: si no hay denuncias en el "Resto"
+          titulo <- paste0("<span style='font-size:0.85em;'>", toupper(hover_id), ": zonas no municipalizadas y capital departamental</span>")
+          v_d_tot <- 0
+          v_e_tot <- 0
+          v_tooltip <- "<div style='color:#999;font-size:12px;'>0 Registros</div>"
+        }
+      }
+    } else {
+      # Modo Departamental
+      d_hover <- d_nacional %>% filter(Depto_Limpio == hover_id)
+      if (nrow(d_hover) > 0) {
+        titulo <- d_hover$Depto_Limpio
+        v_d_tot <- d_hover$D_Tot
+        v_e_tot <- d_hover$E_Tot
+        v_tooltip <- d_hover$TooltipHTML
+      } else {
+        return(NULL)
+      }
     }
+
+    HTML(paste0(
+      "<div style='background:white; border:2px solid #002D62; padding:15px; border-radius:10px; box-shadow:0 4px 12px rgba(0,0,0,0.1);'>",
+      "<h3 style='color:#002D62; margin-top:0;'>", titulo, "</h3>",
+      "<div style='display:flex; justify-content:space-around; margin-bottom:15px; text-align:center;'>",
+      "<div><span style='font-size:0.8rem; color:#666;'>DENUNCIAS</span><br><b style='font-size:1.4rem;'>", v_d_tot, "</b></div>",
+      "<div><span style='font-size:0.8rem; color:#666;'>EXPEDIENTES</span><br><b style='font-size:1.4rem;'>", v_e_tot, "</b></div>",
+      "</div>",
+      "<hr style='margin:10px 0;'>",
+      "<div style='font-weight:bold; color:#555; margin-bottom:8px; font-size:0.9rem;'>Principales Motivos:</div>",
+      v_tooltip,
+      "</div>"
+    ))
   })
 
   output$grafico_serie <- renderGirafe({
