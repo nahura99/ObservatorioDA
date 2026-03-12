@@ -1,0 +1,6 @@
+library(dplyr)
+load("sin_municipio.Rdata")
+cat("Rows:", nrow(sin_municipio), "\n")
+cat("Cols:", paste(colnames(sin_municipio), collapse=", "), "\n")
+cat("\nFrecuencias:\n")
+print(sin_municipio %>% count(DEPARTAMENTO, LOCALIDAD, sort=TRUE) %>% head(3))

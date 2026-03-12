@@ -1,0 +1,12 @@
+name: ObservatorioDA
+title: ObservatorioDA
+username: nahuelroel
+account: nahuelroel
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 16866387
+bundleId: 11696693
+url: https://nahuelroel.shinyapps.io/ObservatorioDA/
+version: 1
+asMultiple: FALSE
+asStatic: FALSE

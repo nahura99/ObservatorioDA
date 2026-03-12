@@ -1,0 +1,1 @@
+https://mapas.ide.uy/geoserver-vectorial/ideuy/ows?service=WFS&version=1.0.0&request=GetFeature&typeName=ideuy:snd_limmun&outputFormat=SHAPE-ZIP
