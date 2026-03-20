@@ -28,18 +28,11 @@ suppressPackageStartupMessages({
   library(ggrepel)
 })
 
-# Helper para el % de carga en el Waiter (OOM fix y UX mejorada)
-make_waiter_html <- function(pct = 0, text = "Cargando...") {
+# Helper para el cargador original (UX revertida a solicitud del usuario)
+make_waiter_html <- function(pct = 0, text = NULL) {
+  # Volvemos al círculo simple original (spin_3) sin números ni texto
   tagList(
-    div(
-      style = "position: relative; width: 100px; height: 80px; margin: 0 auto; display: flex; align-items: center; justify-content: center;",
-      waiter::spin_fading_circles(),
-      div(
-        style = "position: absolute; font-weight: 800; font-size: 1rem; color: #002D62; text-shadow: 1px 1px 0px rgba(255,255,255,0.8);",
-        paste0(pct, "%")
-      )
-    ),
-    div(style = "margin-top: 5px; font-weight: 600; color: #333; font-size: 14px;", text)
+    div(style = "transform: scale(1.6);", waiter::spin_3())
   )
 }
 
@@ -235,7 +228,7 @@ ui <- page_fluid(
       display: flex;
       align-items: center;
       height: 60px;
-      z-index: 100000; /* Asegurar que el contenedor esté sobre el mapa/gráficos */
+      z-index: 5000; /* Suficiente para estar sobre el mapa (1000) pero debajo del Waiter inicial */
     }
     .contacto-chip {
       background-color: #fce4ec;
@@ -536,13 +529,6 @@ ui <- page_fluid(
           girafeOutput("grafico_serie", height = SERIES_HEIGHT)
         )),
         shinyjs::hidden(div(
-          id = "panel_deptos_serie", class = "depto-buttons", style = paste0("width: ", SERIES_BOX_WIDTH, "; max-width: 100%; margin: 15px auto 0 auto;"),
-          tags$div(style = "font-size: 11px; font-weight: bold; color: #555; text-align: center; margin-bottom: 5px;", "Departamentos"),
-          actionButton("btn_sel_all_deptos", "Todos", class = "btn-depto-action"),
-          actionButton("btn_desel_all_deptos", "Ninguno", class = "btn-depto-action"),
-          checkboxGroupButtons("filtro_deptos", NULL, choices = lista_deptos, selected = c("CANELONES", "MALDONADO", "ROCHA", "COLONIA"))
-        )),
-        shinyjs::hidden(div(
           id = "contenedor_estacional",
           style = paste0("width: ", SERIES_BOX_WIDTH, "; max-width: 100%; margin: 15px auto 0 auto; position: relative; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.05);"),
           tags$div(style = "text-align: center; font-weight: 700; font-size: 13px; color: #333; padding: 12px 0 4px 0; background: white;", "Distribuci\u00f3n mensual de denuncias"),
@@ -553,6 +539,30 @@ ui <- page_fluid(
           style = "width: 100%; max-width: 100%; margin: 15px auto 0 auto; position: relative; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.05);",
           tags$div(style = "text-align: center; font-weight: 700; font-size: 13px; color: #333; padding: 12px 0 4px 0; background: white;", "Composici\u00f3n de sub-motivos"),
           girafeOutput("grafico_composicion", height = SERIES_HEIGHT)
+        )),
+        # --- FILTRO DEPARTAMENTOS: SERIE ---
+        shinyjs::hidden(div(
+          id = "panel_deptos_serie", class = "depto-buttons", style = paste0("width: ", SERIES_BOX_WIDTH, "; max-width: 100%; margin: 15px auto 0 auto;"),
+          tags$div(style = "font-size: 11px; font-weight: bold; color: #555; text-align: center; margin-bottom: 5px;", "Departamentos (Serie)"),
+          actionButton("btn_sel_serie", "Todos", class = "btn-depto-action"),
+          actionButton("btn_desel_serie", "Ninguno", class = "btn-depto-action"),
+          checkboxGroupButtons("filtro_deptos_serie", NULL, choices = lista_deptos, selected = c("CANELONES", "MALDONADO", "ROCHA", "COLONIA"))
+        )),
+        # --- FILTRO DEPARTAMENTOS: ESTACIONALIDAD ---
+        shinyjs::hidden(div(
+          id = "panel_deptos_estacional", class = "depto-buttons", style = paste0("width: ", SERIES_BOX_WIDTH, "; max-width: 100%; margin: 15px auto 0 auto;"),
+          tags$div(style = "font-size: 11px; font-weight: bold; color: #555; text-align: center; margin-bottom: 5px;", "Departamentos (Estacionalidad)"),
+          actionButton("btn_sel_estacional", "Todos", class = "btn-depto-action"),
+          actionButton("btn_desel_estacional", "Ninguno", class = "btn-depto-action"),
+          checkboxGroupButtons("filtro_deptos_estacional", NULL, choices = lista_deptos, selected = lista_deptos)
+        )),
+        # --- FILTRO DEPARTAMENTOS: COMPOSICION ---
+        shinyjs::hidden(div(
+          id = "panel_deptos_composicion", class = "depto-buttons", style = paste0("width: ", SERIES_BOX_WIDTH, "; max-width: 100%; margin: 15px auto 0 auto;"),
+          tags$div(style = "font-size: 11px; font-weight: bold; color: #555; text-align: center; margin-bottom: 5px;", "Departamentos (Composición)"),
+          actionButton("btn_sel_composicion", "Todos", class = "btn-depto-action"),
+          actionButton("btn_desel_composicion", "Ninguno", class = "btn-depto-action"),
+          checkboxGroupButtons("filtro_deptos_composicion", NULL, choices = lista_deptos, selected = lista_deptos)
         ))
       ),
 
@@ -581,14 +591,18 @@ server <- function(input, output, session) {
   # Se añade un pequeño retraso para asegurar que los elementos pesados (el mapa) empiecen a dibujar
   shinyjs::delay(1500, waiter_hide())
 
-  # Mover los botones Todos y Ninguno dentro del grupo flexible de botones de forma nativa
-  shinyjs::delay(100, shinyjs::runjs("$('#filtro_deptos .btn-group').prepend($('#btn_desel_all_deptos')).prepend($('#btn_sel_all_deptos'));"))
+  # Mover los botones Todos y Ninguno dentro del grupo flexible de botones de forma nativa (para los 3 grupos)
+  shinyjs::delay(100, shinyjs::runjs("
+    $('#filtro_deptos_serie .btn-group').prepend($('#btn_desel_serie')).prepend($('#btn_sel_serie'));
+    $('#filtro_deptos_estacional .btn-group').prepend($('#btn_desel_estacional')).prepend($('#btn_sel_estacional'));
+    $('#filtro_deptos_composicion .btn-group').prepend($('#btn_desel_composicion')).prepend($('#btn_sel_composicion'));
+  "))
 
-  # Configurar Waiters para los componentes individuales (con % de carga)
-  w_mapa <- Waiter$new(id = "mapa_interactivo", html = make_waiter_html(0, "Iniciando mapa..."), color = "rgba(255,255,255,0.85)")
-  w_serie <- Waiter$new(id = "grafico_serie", html = make_waiter_html(0, "Preparando serie..."), color = "rgba(255,255,255,0.85)")
-  w_estacional <- Waiter$new(id = "grafico_estacional", html = make_waiter_html(0, "Analizando tiempo..."), color = "rgba(255,255,255,0.85)")
-  w_composicion <- Waiter$new(id = "grafico_composicion", html = make_waiter_html(0, "Calculando motivos..."), color = "rgba(255,255,255,0.85)")
+  # Configurar Waiters para los componentes individuales (Círculo simple)
+  w_mapa <- Waiter$new(id = "mapa_interactivo", html = make_waiter_html(), color = "rgba(255,255,255,0.85)")
+  w_serie <- Waiter$new(id = "grafico_serie", html = make_waiter_html(), color = "rgba(255,255,255,0.85)")
+  w_estacional <- Waiter$new(id = "grafico_estacional", html = make_waiter_html(), color = "rgba(255,255,255,0.85)")
+  w_composicion <- Waiter$new(id = "grafico_composicion", html = make_waiter_html(), color = "rgba(255,255,255,0.85)")
 
   # Valores reactivos para estado de hover
   rv <- reactiveValues(depto_hover = NULL)
@@ -611,13 +625,28 @@ server <- function(input, output, session) {
     # Vacío intencionalmente. Delegamos el reseteo al polígono EXTERIOR para evitar parpadeos al pasar por los ríos.
   })
 
-  # Botones de seleccionar todos / ninguno para departamentos
-  observeEvent(input$btn_sel_all_deptos, {
-    updateCheckboxGroupButtons(session, "filtro_deptos", selected = lista_deptos)
+  # Botones de seleccionar todos / ninguno para departamentos (SERIE)
+  observeEvent(input$btn_sel_serie, {
+    updateCheckboxGroupButtons(session, "filtro_deptos_serie", selected = lista_deptos)
+  })
+  observeEvent(input$btn_desel_serie, {
+    updateCheckboxGroupButtons(session, "filtro_deptos_serie", selected = character(0))
   })
 
-  observeEvent(input$btn_desel_all_deptos, {
-    updateCheckboxGroupButtons(session, "filtro_deptos", selected = character(0))
+  # Botones de seleccionar todos / ninguno (ESTACIONALIDAD)
+  observeEvent(input$btn_sel_estacional, {
+    updateCheckboxGroupButtons(session, "filtro_deptos_estacional", selected = lista_deptos)
+  })
+  observeEvent(input$btn_desel_estacional, {
+    updateCheckboxGroupButtons(session, "filtro_deptos_estacional", selected = character(0))
+  })
+
+  # Botones de seleccionar todos / ninguno (COMPOSICION)
+  observeEvent(input$btn_sel_composicion, {
+    updateCheckboxGroupButtons(session, "filtro_deptos_composicion", selected = lista_deptos)
+  })
+  observeEvent(input$btn_desel_composicion, {
+    updateCheckboxGroupButtons(session, "filtro_deptos_composicion", selected = character(0))
   })
 
   # Ocultar indicador de carga cuando el mapa termina de procesarse en el cliente
@@ -629,7 +658,6 @@ server <- function(input, output, session) {
     modo <- input$modo_vista
     es_mapa <- modo %in% c("MAPA", "MAPA MUNICIPAL", "EXPEDIENTES")
     es_serie <- modo == "SERIE"
-
     # -- Visibilidad de contenedores --
     if (es_mapa) {
       shinyjs::show("controles_mapa")
@@ -649,8 +677,21 @@ server <- function(input, output, session) {
       shinyjs::hide("panel_deptos_serie")
     }
 
-    if (modo == "ESTACIONALIDAD") shinyjs::show("contenedor_estacional") else shinyjs::hide("contenedor_estacional")
-    if (modo == "COMPOSICION") shinyjs::show("contenedor_composicion") else shinyjs::hide("contenedor_composicion")
+    if (modo == "ESTACIONALIDAD") {
+      shinyjs::show("contenedor_estacional")
+      shinyjs::show("panel_deptos_estacional")
+    } else {
+      shinyjs::hide("contenedor_estacional")
+      shinyjs::hide("panel_deptos_estacional")
+    }
+
+    if (modo == "COMPOSICION") {
+      shinyjs::show("contenedor_composicion")
+      shinyjs::show("panel_deptos_composicion")
+    } else {
+      shinyjs::hide("contenedor_composicion")
+      shinyjs::hide("panel_deptos_composicion")
+    }
 
     # -- Anchos de columna --
     if (es_mapa) {
@@ -847,10 +888,10 @@ server <- function(input, output, session) {
     var_tooltip <- ifelse(input$filtro_motivo == "Todos los motivos", "MOTIVO_AGRUPADO", "MOTIVO")
 
     # Filtrar por departamentos seleccionados
-    if (is.null(input$filtro_deptos) || length(input$filtro_deptos) == 0) {
+    if (is.null(input$filtro_deptos_serie) || length(input$filtro_deptos_serie) == 0) {
       return(data.frame())
     } else {
-      d_base <- d_base %>% filter(Depto_Limpio %in% input$filtro_deptos)
+      d_base <- d_base %>% filter(Depto_Limpio %in% input$filtro_deptos_serie)
     }
 
     base_tiempo <- d_base %>%
@@ -976,23 +1017,17 @@ server <- function(input, output, session) {
     # Fallback de seguridad para ocultar el waiter
     shinyjs::delay(10000, w_mapa$hide())
 
-    w_mapa$update(html = make_waiter_html(10, "Preparando datos territoriales..."))
-
     is_muni <- input$modo_vista == "MAPA MUNICIPAL"
     is_exp <- input$modo_vista == "EXPEDIENTES"
 
     if (is_muni) {
-      w_mapa$update(html = make_waiter_html(30, "Cargando municipios (esto puede tardar)..."))
       d <- datos_municipios()
     } else if (is_exp) {
-      w_mapa$update(html = make_waiter_html(30, "Calculando registros de expedientes..."))
       d <- datos_expedientes()
     } else {
-      w_mapa$update(html = make_waiter_html(30, "Cargando departamentos..."))
       d <- datos_mapa()
     }
 
-    w_mapa$update(html = make_waiter_html(60, "Calculando centroides y etiquetas..."))
     centroids <- if (is_muni) uruguay_municipios_centroids else uruguay_mapa_centroids
     id_col <- if (is_muni) "Muni_Limpio" else "Depto_Limpio"
 
@@ -1065,7 +1100,6 @@ server <- function(input, output, session) {
         )
     }
 
-    w_mapa$update(html = make_waiter_html(95, "Renderizando capas finales..."))
     proxy %>%
       addLabelOnlyMarkers(
         data = d_centr, lng = ~lon, lat = ~lat, label = ~Label,
@@ -1080,7 +1114,6 @@ server <- function(input, output, session) {
         )
       )
 
-    w_mapa$update(html = make_waiter_html(100, "¡Listo!"))
     # Retraso para evitar flash blanco (0.5s extra de carga solicitado por el usuario)
     shinyjs::delay(700, w_mapa$hide())
   })
@@ -1315,12 +1348,13 @@ server <- function(input, output, session) {
     # req() garantiza que este render solo corre en modo SERIE.
     # Tambien hace que se invalide (y re-corra) cada vez que modo_vista cambia a SERIE.
     req(input$modo_vista == "SERIE")
+    if (is.null(input$filtro_deptos_serie) || length(input$filtro_deptos_serie) == 0) {
+      return(NULL)
+    }
     w_serie$show()
-    w_serie$update(html = make_waiter_html(20, "Filtrando serie histórica..."))
     on.exit(w_serie$hide(), add = TRUE)
 
     d <- datos_serie()
-    w_serie$update(html = make_waiter_html(60, "Calculando proyecciones y tendencias..."))
     if (nrow(d) == 0) {
       return(NULL)
     }
@@ -1352,7 +1386,11 @@ server <- function(input, output, session) {
   datos_estacional <- reactive({
     req(input$filtro_anio)
     meses_lbl <- c("Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic")
-    d <- datos_filtrados_motivo() %>%
+    d <- datos_filtrados_motivo()
+    if (!is.null(input$filtro_deptos_estacional) && length(input$filtro_deptos_estacional) > 0) {
+      d <- d %>% filter(Depto_Limpio %in% input$filtro_deptos_estacional)
+    }
+    d <- d %>%
       filter(Anio >= as.character(input$filtro_anio[1]) & Anio <= as.character(input$filtro_anio[2])) %>%
       filter(!is.na(`FECHA DENUNCIA`)) %>%
       mutate(
@@ -1380,11 +1418,12 @@ server <- function(input, output, session) {
 
   output$grafico_estacional <- renderGirafe({
     req(input$modo_vista == "ESTACIONALIDAD")
+    if (is.null(input$filtro_deptos_estacional) || length(input$filtro_deptos_estacional) == 0) {
+      return(NULL)
+    }
     w_estacional$show()
-    w_estacional$update(html = make_waiter_html(30, "Calculando patrones estacionales..."))
     on.exit(w_estacional$hide(), add = TRUE)
     d <- datos_estacional()
-    w_estacional$update(html = make_waiter_html(75, "Generando mapa de calor..."))
     if (nrow(d) == 0) {
       return(NULL)
     }
@@ -1417,7 +1456,11 @@ server <- function(input, output, session) {
   datos_composicion <- reactive({
     req(input$filtro_anio)
     var_comp <- ifelse(input$filtro_motivo == "Todos los motivos", "MOTIVO_AGRUPADO", "MOTIVO")
-    datos_filtrados_motivo() %>%
+    d <- datos_filtrados_motivo()
+    if (!is.null(input$filtro_deptos_composicion) && length(input$filtro_deptos_composicion) > 0) {
+      d <- d %>% filter(Depto_Limpio %in% input$filtro_deptos_composicion)
+    }
+    d %>%
       filter(Anio >= as.character(input$filtro_anio[1]) & Anio <= as.character(input$filtro_anio[2])) %>%
       group_by(Anio, Categoria = !!sym(var_comp)) %>%
       summarise(N = n(), .groups = "drop") %>%
@@ -1433,11 +1476,12 @@ server <- function(input, output, session) {
 
   output$grafico_composicion <- renderGirafe({
     req(input$modo_vista == "COMPOSICION")
+    if (is.null(input$filtro_deptos_composicion) || length(input$filtro_deptos_composicion) == 0) {
+      return(NULL)
+    }
     w_composicion$show()
-    w_composicion$update(html = make_waiter_html(30, "Analizando sub-motivos..."))
     on.exit(w_composicion$hide(), add = TRUE)
     d <- datos_composicion()
-    w_composicion$update(html = make_waiter_html(75, "Agregando proporciones..."))
     if (nrow(d) == 0) {
       return(NULL)
     }
