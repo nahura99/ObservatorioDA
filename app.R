@@ -79,25 +79,16 @@ colores_motivos <- c(
   "Aire y Emisiones" = "#17becf",
   "Costa y Áreas Protegidas" = "#20c997",
   "Agroquímicos y Sustancias Peligrosas" = "#FF7700",
-  "Gestión de Residuos" = "#8b8b83",
+  "Gestión de Residuos" = "#8B4513",
   "Gestión Institucional y Obras" = "#bcbd22",
   "Olores" = "#e377c2"
 )
 
-# Paletas extendidas para submotivos (base, variante1, variante2)
-colores_extendidos_motivos <- list(
-  "Todos los motivos" = c("#002D62"),
-  "Fauna y Biodiversidad" = c("#2ca02c", "#bcbd22", "#1f77b4"),
-  "Otros" = c("#7f7f7f", "#2ca02c", "#8b8b83"),
-  "Agua y Vertidos" = c("#1f77b4", "#9467bd", "#20c997"),
-  "Ruidos" = c("#9467bd", "#e377c2", "#17becf"),
-  "Minería" = c("#d62728", "#8b8b83", "#FF7700"),
-  "Aire y Emisiones" = c("#17becf", "#1f77b4", "#e377c2"),
-  "Costa y Areas Protegidas" = c("#20c997", "#1f77b4", "#2ca02c"),
-  "Agroquímicos y Sustancias Peligrosas" = c("#FF7700", "#d62728", "#bcbd22"),
-  "Gestión de Residuos" = c("#8b8b83", "#7f7f7f", "#d62728"),
-  "Gestión Institucional y Obras" = c("#bcbd22", "#2ca02c", "#FF7700"),
-  "Olores" = c("#e377c2", "#9467bd", "#17becf")
+# Paleta categorial para Submotivos (Tableau ampliada)
+colores_distintos_12 <- c(
+  "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728",
+  "#9467bd", "#8c564b", "#e377c2", "#7f7f7f",
+  "#bcbd22", "#17becf", "#393b79", "#637939"
 )
 # ==========================================
 # Cargar geodatos pre-procesados (evita descarga de internet en cada inicio)
@@ -1479,15 +1470,9 @@ server <- function(input, output, session) {
           cats <- unique(d$Categoria)
           scale_fill_manual(values = colores_motivos[cats], name = "Motivo")
         } else {
-          motivo_actual <- input$filtro_motivo
-          base_colors <- colores_extendidos_motivos[[motivo_actual]]
           cats <- unique(d$Categoria)
           n_cats <- length(cats)
-          if (n_cats == 1) {
-            paleta_sub <- base_colors[1]
-          } else {
-            paleta_sub <- colorRampPalette(base_colors)(n_cats)
-          }
+          paleta_sub <- rep(colores_distintos_12, length.out = n_cats)
           scale_fill_manual(values = setNames(paleta_sub, cats), name = "Sub-motivo")
         }
       } +
@@ -1499,7 +1484,8 @@ server <- function(input, output, session) {
         legend.text        = element_text(size = 8),
         legend.title       = element_text(size = 9, face = "bold"),
         panel.grid.major.x = element_blank()
-      )
+      ) +
+      guides(fill = guide_legend(ncol = 3, byrow = TRUE))
     girafe(
       ggobj = gg, width_svg = 11, height_svg = 6.5,
       options = list(
