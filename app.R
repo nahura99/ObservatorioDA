@@ -3,7 +3,7 @@
 ################################################################################
 
 # Cargar librerías necesarias
-packages <- c("shiny", "bslib", "shinyWidgets", "ggplot2", "sf", "dplyr", "stringr", "lubridate", "ggiraph", "shinycssloaders", "leaflet", "shinyjs", "htmlwidgets", "waiter", "ggrepel")
+packages <- c("shiny", "bslib", "shinyWidgets", "ggplot2", "sf", "dplyr", "stringr", "lubridate", "ggiraph", "shinycssloaders", "leaflet", "shinyjs", "htmlwidgets", "waiter", "ggrepel", "tidyr")
 for (p in packages) {
   if (!requireNamespace(p, quietly = TRUE)) install.packages(p, repos = "https://cloud.r-project.org", quiet = TRUE)
 }
@@ -26,6 +26,7 @@ suppressPackageStartupMessages({
   library(htmlwidgets)
   library(waiter)
   library(ggrepel)
+  library(tidyr)
 })
 
 # Helper para el cargador original (UX revertida a solicitud del usuario)
@@ -39,66 +40,11 @@ make_waiter_html <- function(pct = 0, text = NULL) {
 # ==========================================
 # 1. PREPARACIÓN DE DATOS GLOBALES
 # ==========================================
-if (file.exists("planilla_limpia.RData")) {
-  load("planilla_limpia.RData")
-  df <- planilla_limpia
+if (file.exists("data/df_app.rds")) {
+  df <- readRDS("data/df_app.rds")
 } else {
-  stop("El archivo planilla_limpia.RData no se encuentra.")
+  stop("El archivo data/df_app.rds no se encuentra. Ejecute scripts/preparar_app_data.R primero.")
 }
-limpiar_texto <- function(x) {
-  x <- toupper(str_trim(as.character(x)))
-  x <- setNames(c("A", "E", "I", "O", "U", "N"), c("Á", "É", "Í", "Ó", "Ú", "Ñ")) %>% stringr::str_replace_all(x, .)
-  return(x)
-}
-df <- df %>%
-  mutate(
-    Anio = as.character(year(`FECHA DENUNCIA`)),
-    MOTIVO = ifelse(is.na(MOTIVO) | trimws(MOTIVO) == "", "Sin especificar", str_trim(MOTIVO)),
-    MOTIVO_AGRUPADO = case_when(
-      # Prioridad: Si el submotiivo es "Otros", el grupo es "Otros"
-      MOTIVO == "Otros" ~ "Otros",
-      trimws(MOTIVO_AGRUPADO) == "Ruido" ~ "Ruidos",
-      trimws(MOTIVO_AGRUPADO) == "Fauna" ~ "Fauna y Biodiversidad",
-      trimws(MOTIVO_AGRUPADO) == "Agroquímicos" ~ "Agroquímicos y Sustancias Peligrosas",
-      trimws(MOTIVO_AGRUPADO) == "Faja de Costas" ~ "Costa y Áreas Protegidas",
-      trimws(MOTIVO_AGRUPADO) == "Minería y Suelos" ~ "Minería",
-      # Reglas por submotivo específico
-      MOTIVO %in% c(
-        "Incumplimiento de la faja de amortiguación en la Laguna del Sauce",
-        "Incumplimiento de la faja de amortiguación en el Río Santa Lucía"
-      ) ~ "Costa y Áreas Protegidas",
-      trimws(MOTIVO_AGRUPADO) == "Residuos Sólidos y Suelos" ~ "Gestión de Residuos",
-      # Reclasificación desde el grupo "Otros" (captura lo que no es submotiivo 'Otros' pero estaba huerfano)
-      (trimws(MOTIVO_AGRUPADO) == "Otros" | is.na(MOTIVO_AGRUPADO) | trimws(MOTIVO_AGRUPADO) == "") &
-        MOTIVO == "Incumplimiento de autorizaciones" ~ "Gestión Institucional y Obras",
-      (trimws(MOTIVO_AGRUPADO) == "Otros" | is.na(MOTIVO_AGRUPADO) | trimws(MOTIVO_AGRUPADO) == "") &
-        MOTIVO == "Sustancias peligrosas" ~ "Agroquímicos y Sustancias Peligrosas",
-      (trimws(MOTIVO_AGRUPADO) == "Otros" | is.na(MOTIVO_AGRUPADO) | trimws(MOTIVO_AGRUPADO) == "") &
-        MOTIVO == "Actividades en áreas protegidas" ~ "Costa y Áreas Protegidas",
-      # Mover Olores de Aire a su propia categoría
-      trimws(MOTIVO_AGRUPADO) == "Aire y Emisiones" & str_detect(MOTIVO, "Olores") ~ "Olores",
-      # Limpiar nombres de grupos sobrantes
-      trimws(MOTIVO_AGRUPADO) == "Gestión Institucional, Obras y Otros" ~ "Gestión Institucional y Obras",
-      is.na(MOTIVO_AGRUPADO) | trimws(MOTIVO_AGRUPADO) == "" ~ "Otros",
-      TRUE ~ str_trim(MOTIVO_AGRUPADO)
-    ),
-    Depto_Limpio = limpiar_texto(DEPARTAMENTO),
-    Muni_Limpio_Nom = limpiar_texto(MUNICIPIO),
-    Muni_Limpio_Nom = ifelse(Depto_Limpio == "MONTEVIDEO", "MONTEVIDEO", Muni_Limpio_Nom),
-    Tiene_Expediente = as.integer(!is.na(`N° EXPEDIENTE`) & str_trim(`N° EXPEDIENTE`) != "")
-  ) %>%
-  filter(!is.na(Anio))
-
-# Corregir vacios municipales por RESTO
-df <- df %>%
-  mutate(Muni_Limpio = ifelse(Depto_Limpio == "MONTEVIDEO", "MONTEVIDEO",
-    ifelse(is.na(Muni_Limpio_Nom) | Muni_Limpio_Nom == "" | Muni_Limpio_Nom == "TERRITORIO NO MUNICIPALIZADO",
-      paste("RESTO DE", Depto_Limpio),
-      paste0(Muni_Limpio_Nom, " (", Depto_Limpio, ")")
-    )
-  )) %>%
-  # Mantener solo columnas estrictamente necesarias para reducir memoria (OOM fix)
-  select(`FECHA DENUNCIA`, MOTIVO, MOTIVO_AGRUPADO, Depto_Limpio, Muni_Limpio, Anio, Tiene_Expediente)
 anios_str <- sort(unique(df$Anio), decreasing = FALSE)
 # Primer año con al menos un expediente (para restringir el slider en modo Expedientes)
 primer_anio_expediente <- df %>%
@@ -107,7 +53,22 @@ primer_anio_expediente <- df %>%
   as.numeric() %>%
   min(na.rm = TRUE)
 motivos_str <- sort(unique(df$MOTIVO_AGRUPADO))
-opciones_motivo <- c("Todos los motivos", motivos_str)
+
+# Ordenamiento de chips en grilla 3x4
+opciones_motivo <- c(
+  "Todos los motivos",
+  "Agroquímicos y Sustancias Peligrosas",
+  "Agua y Vertidos",
+  "Aire y Emisiones",
+  "Costa y Áreas Protegidas",
+  "Fauna y Biodiversidad",
+  "Gestión de Residuos",
+  "Gestión Institucional y Obras",
+  "Minería",
+  "Ruidos",
+  "Olores",
+  "Otros"
+)
 colores_motivos <- c(
   "Todos los motivos" = "#002D62",
   "Fauna y Biodiversidad" = "#2ca02c",
@@ -122,6 +83,22 @@ colores_motivos <- c(
   "Gestión Institucional y Obras" = "#bcbd22",
   "Olores" = "#e377c2"
 )
+
+# Paletas extendidas para submotivos (base, variante1, variante2)
+colores_extendidos_motivos <- list(
+  "Todos los motivos" = c("#002D62"),
+  "Fauna y Biodiversidad" = c("#2ca02c", "#bcbd22", "#1f77b4"),
+  "Otros" = c("#7f7f7f", "#2ca02c", "#8b8b83"),
+  "Agua y Vertidos" = c("#1f77b4", "#9467bd", "#20c997"),
+  "Ruidos" = c("#9467bd", "#e377c2", "#17becf"),
+  "Minería" = c("#d62728", "#8b8b83", "#FF7700"),
+  "Aire y Emisiones" = c("#17becf", "#1f77b4", "#e377c2"),
+  "Costa y Areas Protegidas" = c("#20c997", "#1f77b4", "#2ca02c"),
+  "Agroquímicos y Sustancias Peligrosas" = c("#FF7700", "#d62728", "#bcbd22"),
+  "Gestión de Residuos" = c("#8b8b83", "#7f7f7f", "#d62728"),
+  "Gestión Institucional y Obras" = c("#bcbd22", "#2ca02c", "#FF7700"),
+  "Olores" = c("#e377c2", "#9467bd", "#17becf")
+)
 # ==========================================
 # Cargar geodatos pre-procesados (evita descarga de internet en cada inicio)
 # Ejecutar scripts/preparar_geodatos.R una sola vez para generar este archivo.
@@ -133,14 +110,7 @@ load("geodatos.RData")
 # geodatos.RData contiene: uruguay_mapa, uruguay_municipios, uruguay_mapa_bboxes,
 # uruguay_mapa_centroids, uruguay_municipios_centroids, deps_bb
 
-# Optimización masiva de memoria: Simplificación en carga y limpieza de columnas (OOM fix)
-uruguay_mapa <- uruguay_mapa %>%
-  select(Depto_Limpio, geometry) %>%
-  st_simplify(dTolerance = 0.0005, preserveTopology = TRUE)
-uruguay_municipios <- uruguay_municipios %>%
-  select(Muni_Limpio, Depto_Limpio, geometry) %>%
-  st_simplify(dTolerance = 0.0005, preserveTopology = TRUE)
-gc() # Forzar recolección de residuos tras liberar geometrías pesadas
+# Este archivo ya contiene uruguay_mapa y uruguay_municipios optimizados en tamaño.
 
 lista_deptos_vals <- sort(unique(uruguay_mapa$Depto_Limpio))
 lista_deptos_nombres <- stringr::str_to_title(tolower(lista_deptos_vals))
@@ -159,7 +129,7 @@ colores_departamentos_vivos <- c(
 paleta_suave <- c("#A6CEE3", "#B2DF8A", "#FB9A99", "#FDBF6F", "#CAB2D6", "#FFFF99", "#8DD3C7", "#BEBADA", "#FB8072", "#80B1D3", "#FDB462", "#B3DE69", "#FCCDE5")
 depto_resto <- setdiff(lista_deptos_vals, names(colores_departamentos_vivos))
 colores_departamentos_suaves <- setNames(paleta_suave[1:length(depto_resto)], depto_resto)
-paleta_final_series <- c(colores_departamentos_vivos, colores_departamentos_suaves)
+paleta_final_series <- c(colores_departamentos_vivos, colores_departamentos_suaves, "Todos" = "#7f7f7f")
 # Configuración de dimensiones relativas por defecto (Vista Mapa)
 COL_LEFT_PCT <- "60%"
 COL_RIGHT_PCT <- "38%" # 60 + 38 + 2 (gap) = 100
@@ -181,7 +151,7 @@ SERIES_RIGHT_PCT <- paste0(100 - as.numeric(gsub("%", "", SERIES_WIDTH_PCT)) - a
 MAP_HEIGHT <- "550px"
 
 # Altura específica para el gráfico de SERIES
-SERIES_HEIGHT <- "400px"
+SERIES_HEIGHT <- "450px"
 
 # Ancho interno de la caja blanca del gráfico de SERIE (puede ser en px o %)
 # Disminuye este valor para que la tarjeta no sobre horizonalmente sino que abrace al gráfico de serie
@@ -283,11 +253,12 @@ ui <- page_fluid(
 
     .shiny-input-container { margin-bottom: 0 !important; }
     .header-container { display: flex; align-items: center; justify-content: space-between; flex-wrap: nowrap; width: 100%; margin: 5px 0 15px 0; padding: 0; height: 60px; }
-    .header-left-block { flex: 0 0 ", COL_LEFT_PCT, "; display: flex; align-items: center; justify-content: space-between; gap: 15px; height: 60px; }
-    .header-right-block { flex: 0 0 ", COL_RIGHT_PCT, "; display: flex; align-items: center; justify-content: flex-end; height: 60px; padding-left: 15px; box-sizing: border-box; }
+    .header-left-block { flex: 0 0 ", COL_LEFT_PCT, "; width: ", COL_LEFT_PCT, "; display: flex; align-items: center; justify-content: space-between; gap: 15px; height: 60px; }
+    .header-right-block { flex: 0 0 ", COL_RIGHT_PCT, "; width: ", COL_RIGHT_PCT, "; display: flex; align-items: center; justify-content: flex-end; height: 60px; box-sizing: border-box; }
 
     .main-selector-container { width: 100%; margin: 0 !important; display: flex; align-items: center; height: 60px; }
     .main-selector-container label.btn {
+      flex: 1;
       border-radius: 10px !important;
       padding: 4px 6px !important;
       margin: 2px 2px !important;
@@ -355,7 +326,6 @@ ui <- page_fluid(
       flex: 0 0 145px;
       box-shadow: 0 2px 4px rgba(0,0,0,0.02);
     }
-    .motivo-buttons input[value='Todos los motivos'] + label { width: 100% !important; flex: 0 0 calc(100% - 12px) !important; }
     .motivo-buttons .btn-group { display: flex; flex-wrap: wrap; justify-content: center; gap: 0; width: 100%; }
 
     .depto-buttons { margin-top: 10px; margin-left: 15px; }
@@ -524,19 +494,19 @@ ui <- page_fluid(
         ),
         shinyjs::hidden(div(
           id = "contenedor_serie",
-          style = paste0("width: ", SERIES_BOX_WIDTH, "; max-width: 100%; margin: 5px auto 0 auto; position: relative; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.05);"),
+          style = paste0("width: ", SERIES_BOX_WIDTH, "; max-width: 100%; margin: 5px auto 0 auto; position: relative; border-radius: 12px; overflow: hidden; background: white; box-shadow: 0 4px 12px rgba(0,0,0,0.05);"),
           uiOutput("titulo_serie"),
           girafeOutput("grafico_serie", height = SERIES_HEIGHT)
         )),
         shinyjs::hidden(div(
           id = "contenedor_estacional",
-          style = paste0("width: ", SERIES_BOX_WIDTH, "; max-width: 100%; margin: 15px auto 0 auto; position: relative; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.05);"),
+          style = paste0("width: ", SERIES_BOX_WIDTH, "; max-width: 100%; margin: 15px auto 0 auto; position: relative; border-radius: 12px; overflow: hidden; background: white; box-shadow: 0 4px 12px rgba(0,0,0,0.05);"),
           tags$div(style = "text-align: center; font-weight: 700; font-size: 13px; color: #333; padding: 12px 0 4px 0; background: white;", "Distribuci\u00f3n mensual de denuncias"),
           girafeOutput("grafico_estacional", height = SERIES_HEIGHT)
         )),
         shinyjs::hidden(div(
           id = "contenedor_composicion",
-          style = "width: 100%; max-width: 100%; margin: 15px auto 0 auto; position: relative; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.05);",
+          style = "width: 100%; max-width: 100%; margin: 15px auto 0 auto; position: relative; border-radius: 12px; overflow: hidden; background: white; box-shadow: 0 4px 12px rgba(0,0,0,0.05);",
           tags$div(style = "text-align: center; font-weight: 700; font-size: 13px; color: #333; padding: 12px 0 4px 0; background: white;", "Composici\u00f3n de sub-motivos"),
           girafeOutput("grafico_composicion", height = SERIES_HEIGHT)
         )),
@@ -550,7 +520,7 @@ ui <- page_fluid(
         )),
         # --- FILTRO DEPARTAMENTOS: ESTACIONALIDAD ---
         shinyjs::hidden(div(
-          id = "panel_deptos_estacional", class = "depto-buttons", style = paste0("width: ", SERIES_BOX_WIDTH, "; max-width: 100%; margin: 15px auto 0 auto;"),
+          id = "panel_deptos_estacional", class = "depto-buttons", style = paste0("width: ", SERIES_BOX_WIDTH, "; max-width: 100%; margin: 40px auto 0 auto;"),
           tags$div(style = "font-size: 11px; font-weight: bold; color: #555; text-align: center; margin-bottom: 5px;", "Departamentos (Estacionalidad)"),
           actionButton("btn_sel_estacional", "Todos", class = "btn-depto-action"),
           actionButton("btn_desel_estacional", "Ninguno", class = "btn-depto-action"),
@@ -902,7 +872,19 @@ server <- function(input, output, session) {
       mutate(Pct_Sub = round((Cant_Sub / T_Anio) * 100, 1)) %>%
       arrange(Anio, Depto_Limpio, desc(Pct_Sub)) %>%
       group_by(Depto_Limpio, Anio) %>%
-      summarise(D_Tot = first(T_Anio), E_Tot = sum(Exp_Sub), .groups = "drop")
+      summarise(D_Tot = first(T_Anio), E_Tot = sum(Exp_Sub), .groups = "drop") %>%
+      tidyr::complete(Depto_Limpio = input$filtro_deptos_serie, Anio = anios_str, fill = list(D_Tot = 0, E_Tot = 0))
+
+    if (length(input$filtro_deptos_serie) == length(lista_deptos)) {
+      base_tiempo <- base_tiempo %>%
+        group_by(Anio) %>%
+        summarise(
+          D_Tot = sum(D_Tot, na.rm = TRUE),
+          E_Tot = sum(E_Tot, na.rm = TRUE),
+          .groups = "drop"
+        ) %>%
+        mutate(Depto_Limpio = "Todos")
+    }
 
     # Calcular valor de eje Y según selección (Capa fija en Denuncias)
     v_formato <- input$filtro_formato_serie
@@ -923,7 +905,7 @@ server <- function(input, output, session) {
     return(base_tiempo)
   })
 
-  output$mapa_interactivo <- renderLeaflet({
+  crear_mapa_base <- function() {
     # Inicialización estática básica del mapa para mejorar carga inicial y estabilidad
     leaflet(options = leafletOptions(zoomControl = FALSE, dragging = TRUE, scrollWheelZoom = TRUE)) %>%
       fitBounds(
@@ -1007,6 +989,10 @@ server <- function(input, output, session) {
           Shiny.setInputValue('mapa_listo', Math.random());
         }
       ")
+  }
+
+  output$mapa_interactivo <- renderLeaflet({
+    crear_mapa_base()
   })
 
   # Actualización reactiva eficiente mediante leafletProxy
@@ -1377,21 +1363,19 @@ server <- function(input, output, session) {
       labs(x = "Año", y = v_ylab, color = "Departamento") +
       theme_minimal() +
       theme(legend.position = "none")
-    girafe(ggobj = gg, width_svg = 10, height_svg = 5, options = list(opts_sizing(rescale = TRUE, width = 1)))
+    girafe(ggobj = gg, width_svg = 10, height_svg = 6.5, options = list(opts_sizing(rescale = TRUE, width = 1)))
   })
 
   # =========================================================
   # ESTACIONALIDAD — Heatmap mes x año
   # =========================================================
   datos_estacional <- reactive({
-    req(input$filtro_anio)
     meses_lbl <- c("Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic")
     d <- datos_filtrados_motivo()
     if (!is.null(input$filtro_deptos_estacional) && length(input$filtro_deptos_estacional) > 0) {
       d <- d %>% filter(Depto_Limpio %in% input$filtro_deptos_estacional)
     }
     d <- d %>%
-      filter(Anio >= as.character(input$filtro_anio[1]) & Anio <= as.character(input$filtro_anio[2])) %>%
       filter(!is.na(`FECHA DENUNCIA`)) %>%
       mutate(
         Mes_num = lubridate::month(`FECHA DENUNCIA`),
@@ -1402,7 +1386,7 @@ server <- function(input, output, session) {
       mutate(Tooltip = paste0("<b>", Mes, " ", Anio, "</b><br>Denuncias: <b>", N, "</b>"))
 
     # Completar cuadricula para que no queden huecos
-    anios_sel <- as.character(seq(as.numeric(input$filtro_anio[1]), as.numeric(input$filtro_anio[2])))
+    anios_sel <- anios_str
     meses_fac <- factor(meses_lbl, levels = meses_lbl)
     grid <- expand.grid(Anio = anios_sel, Mes = meses_fac, stringsAsFactors = FALSE) %>%
       mutate(Mes = factor(Mes, levels = meses_lbl))
@@ -1439,10 +1423,10 @@ server <- function(input, output, session) {
       theme(
         panel.grid      = element_blank(),
         legend.position = "none",
-        plot.margin     = margin(t = 45, r = 10, b = 5, l = 5)
+        plot.margin     = margin(t = 10, r = 10, b = 5, l = 5)
       )
     girafe(
-      ggobj = gg, width_svg = 10, height_svg = 5,
+      ggobj = gg, width_svg = 10, height_svg = 8,
       options = list(
         opts_sizing(rescale = TRUE, width = 1),
         opts_hover(css = "stroke:black;stroke-width:1.5px;")
@@ -1454,14 +1438,12 @@ server <- function(input, output, session) {
   # COMPOSICION — Barras apiladas 100% por motivo y año
   # =========================================================
   datos_composicion <- reactive({
-    req(input$filtro_anio)
     var_comp <- ifelse(input$filtro_motivo == "Todos los motivos", "MOTIVO_AGRUPADO", "MOTIVO")
     d <- datos_filtrados_motivo()
     if (!is.null(input$filtro_deptos_composicion) && length(input$filtro_deptos_composicion) > 0) {
       d <- d %>% filter(Depto_Limpio %in% input$filtro_deptos_composicion)
     }
     d %>%
-      filter(Anio >= as.character(input$filtro_anio[1]) & Anio <= as.character(input$filtro_anio[2])) %>%
       group_by(Anio, Categoria = !!sym(var_comp)) %>%
       summarise(N = n(), .groups = "drop") %>%
       group_by(Anio) %>%
@@ -1497,7 +1479,16 @@ server <- function(input, output, session) {
           cats <- unique(d$Categoria)
           scale_fill_manual(values = colores_motivos[cats], name = "Motivo")
         } else {
-          scale_fill_brewer(palette = "Set3", name = "Sub-motivo")
+          motivo_actual <- input$filtro_motivo
+          base_colors <- colores_extendidos_motivos[[motivo_actual]]
+          cats <- unique(d$Categoria)
+          n_cats <- length(cats)
+          if (n_cats == 1) {
+            paleta_sub <- base_colors[1]
+          } else {
+            paleta_sub <- colorRampPalette(base_colors)(n_cats)
+          }
+          scale_fill_manual(values = setNames(paleta_sub, cats), name = "Sub-motivo")
         }
       } +
       labs(x = "A\u00f1o", y = "Porcentaje") +
@@ -1510,7 +1501,7 @@ server <- function(input, output, session) {
         panel.grid.major.x = element_blank()
       )
     girafe(
-      ggobj = gg, width_svg = 11, height_svg = 5,
+      ggobj = gg, width_svg = 11, height_svg = 6.5,
       options = list(
         opts_sizing(rescale = TRUE, width = 1),
         opts_hover(css = "opacity:0.85;stroke:white;stroke-width:1px;")

@@ -33,7 +33,9 @@ uruguay_mapa <- uruguay_mapa_raw %>%
     st_make_valid() %>%
     st_buffer(10) %>%
     st_transform(4326) %>%
-    st_make_valid()
+    st_make_valid() %>%
+    select(Depto_Limpio, geometry) %>%
+    st_simplify(dTolerance = 0.0005, preserveTopology = TRUE)
 
 message("Leyendo shapefile de municipios...")
 uruguay_municipios_raw <- st_read("municipios/snd_limmun.shp", quiet = TRUE, options = "ENCODING=WINDOWS-1252") %>%
@@ -73,7 +75,10 @@ st_geometry(montevideo_limpio) <- "geometry"
 uruguay_municipios <- bind_rows(
     uruguay_municipios_reales %>% select(Depto_Limpio, Muni_Limpio),
     montevideo_limpio %>% select(Depto_Limpio, Muni_Limpio)
-) %>% st_as_sf()
+) %>% 
+  st_as_sf() %>%
+  select(Muni_Limpio, Depto_Limpio, geometry) %>%
+  st_simplify(dTolerance = 0.0005, preserveTopology = TRUE)
 
 message("Calculando bboxes y centroides...")
 uruguay_mapa_bboxes <- uruguay_mapa %>%
