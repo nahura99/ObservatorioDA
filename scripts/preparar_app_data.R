@@ -89,7 +89,8 @@ df <- df %>%
     )
   )) %>%
   # Mantener solo columnas estrictamente necesarias para reducir memoria
-  select(`FECHA DENUNCIA`, MOTIVO, MOTIVO_AGRUPADO, Depto_Limpio, Muni_Limpio, Anio, Tiene_Expediente)
+  select(`FECHA DENUNCIA`, MOTIVO, MOTIVO_AGRUPADO, Depto_Limpio, Muni_Limpio, Anio, Tiene_Expediente, Expediente = `N° EXPEDIENTE`, Derivacion = `DERIVACIÓN EXTERNA`) %>%
+  mutate(Expediente = ifelse(is.na(Expediente) | trimws(Expediente) == "", "No registra", Expediente))
 
 if (!dir.exists("data")) {
   dir.create("data")

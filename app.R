@@ -3,7 +3,7 @@
 ################################################################################
 
 # Cargar librerías necesarias
-packages <- c("shiny", "bslib", "shinyWidgets", "ggplot2", "sf", "dplyr", "stringr", "lubridate", "ggiraph", "shinycssloaders", "leaflet", "shinyjs", "htmlwidgets", "waiter", "ggrepel", "tidyr")
+packages <- c("shiny", "bslib", "shinyWidgets", "ggplot2", "sf", "dplyr", "stringr", "lubridate", "ggiraph", "shinycssloaders", "leaflet", "shinyjs", "htmlwidgets", "waiter", "ggrepel", "tidyr", "DT")
 for (p in packages) {
   if (!requireNamespace(p, quietly = TRUE)) install.packages(p, repos = "https://cloud.r-project.org", quiet = TRUE)
 }
@@ -27,6 +27,7 @@ suppressPackageStartupMessages({
   library(waiter)
   library(ggrepel)
   library(tidyr)
+  library(DT)
 })
 
 # Helper para el cargador original (UX revertida a solicitud del usuario)
@@ -182,6 +183,32 @@ ui <- page_fluid(
     tags$style(HTML(paste0("
     body, .content-wrapper, .right-side { background-color: #F4FAF6 !important; overflow-x: auto; }
     .obs-title { font-weight: 900; letter-spacing: -0.5px; margin: 0 !important; font-size: 2.2rem; color: #1B4332; white-space: nowrap; line-height: 60px; display: flex; align-items: center; height: 60px; pointer-events: none; }
+
+    /* Estilos Datatable Paginacion Minimalista */
+    .dataTables_wrapper .pagination .page-link {
+      padding: 10px 18px !important;
+      text-decoration: none !important;
+      border: 1px solid transparent !important;
+      margin: 0 4px !important;
+      border-radius: 8px !important;
+      color: #1B4332 !important;
+      background-color: transparent !important;
+      font-weight: 600 !important;
+      transition: all 0.2s ease-in-out !important;
+    }
+    .dataTables_wrapper .pagination .page-link:hover {
+      background-color: #e9f2ec !important;
+      border-color: #e9f2ec !important;
+    }
+    .dataTables_wrapper .pagination .page-item.active .page-link {
+      background-color: #1B4332 !important;
+      color: white !important;
+      border-color: #1B4332 !important;
+    }
+    .dataTables_wrapper .pagination .page-item.disabled .page-link {
+      color: #adb5bd !important;
+      background-color: transparent !important;
+    }
 
     /* Estilos para el chip de contacto y su popup */
     .contacto-wrapper {
@@ -443,7 +470,7 @@ ui <- page_fluid(
         class = "header-right-block",
         div(
           class = "main-selector-container",
-          radioGroupButtons(inputId = "modo_vista", label = NULL, choices = c("Mapa Departamental" = "MAPA", "Mapa Municipal" = "MAPA MUNICIPAL", "Expedientes" = "EXPEDIENTES", "Serie" = "SERIE", "Estacionalidad" = "ESTACIONALIDAD", "Composición" = "COMPOSICION"), selected = "MAPA", status = "primary", justified = TRUE)
+          radioGroupButtons(inputId = "modo_vista", label = NULL, choices = c("Mapa Departamental" = "MAPA", "Mapa Municipal" = "MAPA MUNICIPAL", "Expedientes" = "EXPEDIENTES", "Serie" = "SERIE", "Estacionalidad" = "ESTACIONALIDAD", "Composición" = "COMPOSICION", "Tabla" = "TABLA"), selected = "MAPA", status = "primary", justified = TRUE)
         )
       )
     ),
@@ -500,6 +527,12 @@ ui <- page_fluid(
           style = "width: 100%; max-width: 100%; margin: 15px auto 0 auto; position: relative; border-radius: 12px; overflow: hidden; background: white; box-shadow: 0 4px 12px rgba(0,0,0,0.05);",
           tags$div(style = "text-align: center; font-weight: 700; font-size: 13px; color: #333; padding: 12px 0 4px 0; background: white;", "Composici\u00f3n de sub-motivos"),
           girafeOutput("grafico_composicion", height = SERIES_HEIGHT)
+        )),
+        shinyjs::hidden(div(
+          id = "contenedor_tabla",
+          style = paste0("width: ", SERIES_BOX_WIDTH, "; max-width: 100%; margin: 15px auto 0 auto; position: relative; border-radius: 12px; overflow: hidden; background: white; box-shadow: 0 4px 12px rgba(0,0,0,0.05); padding: 15px;"),
+          tags$div(style = "text-align: center; font-weight: 700; font-size: 13px; color: #333; margin-bottom: 15px;", "Tabla de Denuncias"),
+          DT::dataTableOutput("tabla_denuncias")
         )),
         # --- FILTRO DEPARTAMENTOS: SERIE ---
         shinyjs::hidden(div(
@@ -564,6 +597,7 @@ server <- function(input, output, session) {
   w_serie <- Waiter$new(id = "grafico_serie", html = make_waiter_html(), color = "rgba(255,255,255,0.85)")
   w_estacional <- Waiter$new(id = "grafico_estacional", html = make_waiter_html(), color = "rgba(255,255,255,0.85)")
   w_composicion <- Waiter$new(id = "grafico_composicion", html = make_waiter_html(), color = "rgba(255,255,255,0.85)")
+  w_tabla <- Waiter$new(id = "tabla_denuncias", html = make_waiter_html(), color = "rgba(255,255,255,0.85)")
 
   # Valores reactivos para estado de hover
   rv <- reactiveValues(depto_hover = NULL)
@@ -654,6 +688,12 @@ server <- function(input, output, session) {
       shinyjs::hide("panel_deptos_composicion")
     }
 
+    if (modo == "TABLA") {
+      shinyjs::show("contenedor_tabla")
+    } else {
+      shinyjs::hide("contenedor_tabla")
+    }
+
     # -- Anchos de columna --
     if (es_mapa) {
       shinyjs::runjs(sprintf("document.getElementById('columna_izquierda').style.width = '%s'; document.getElementById('columna_izquierda').style.flex = '0 0 %s';", COL_LEFT_PCT, COL_LEFT_PCT))
@@ -684,7 +724,9 @@ server <- function(input, output, session) {
       w_serie$show()
     } else if (modo == "ESTACIONALIDAD") {
       w_estacional$show()
-    } else if (modo == "COMPOSICION") w_composicion$show()
+    } else if (modo == "COMPOSICION") {
+      w_composicion$show()
+    } else if (modo == "TABLA") w_tabla$show()
   })
 
   observeEvent(input$reset_map_zoom, {
@@ -1492,6 +1534,56 @@ server <- function(input, output, session) {
         opts_sizing(rescale = TRUE, width = 1),
         opts_hover(css = "opacity:0.85;stroke:white;stroke-width:1px;")
       )
+    )
+  })
+
+  # =========================================================
+  # TABLA DE DENUNCIAS
+  # =========================================================
+  output$tabla_denuncias <- DT::renderDataTable({
+    req(input$modo_vista == "TABLA")
+    w_tabla$show()
+    on.exit(w_tabla$hide(), add = TRUE)
+    d <- datos_filtrados_motivo() %>% 
+      filter(Anio >= as.character(input$filtro_anio[1]) & Anio <= as.character(input$filtro_anio[2]))
+    
+    # Seleccionar y renombrar columnas
+    d <- d %>% select(
+      Fecha = `FECHA DENUNCIA`,
+      Departamento = Depto_Limpio,
+      Municipio = Muni_Limpio,
+      `Motivo Agrupado` = MOTIVO_AGRUPADO,
+      Expediente,
+      `Derivación` = Derivacion
+    ) %>%
+      mutate(
+        Expediente = ifelse(
+          Expediente != "No registra",
+          paste0("<a href='https://expediente.ute.com.uy/ConsultasWebMMA/' target='_blank' style='color: blue; text-decoration: underline;'>", Expediente, "</a>"),
+          Expediente
+        )
+      )
+    
+    DT::datatable(
+      d,
+      selection = "none",
+      escape = FALSE,
+      options = list(
+        pageLength = 10,
+        scrollX = TRUE,
+        order = list(list(0, 'desc')),
+        pagingType = "full_numbers",
+        language = list(
+          search = "Buscar:",
+          lengthMenu = "Mostrar _MENU_ entradas",
+          info = "Estás en página _PAGE_",
+          infoEmpty = "",
+          infoFiltered = "",
+          paginate = list(first = "<<", previous = "<", `next` = ">", last = ">>")
+        )
+      ),
+      rownames = FALSE,
+      style = "bootstrap"
     )
   })
 
