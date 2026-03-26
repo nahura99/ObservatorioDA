@@ -315,9 +315,13 @@ ui <- page_fluid(
     }
 
     .slider-row { padding: 0 10px; }
-    .irs--round .irs-bar { background-color: #002D62 !important; }
-    .irs--round .irs-handle { border-color: #002D62 !important; }
-    .irs--round .irs-single, .irs--round .irs-from, .irs--round .irs-to { background-color: #002D62 !important; font-weight: bold; }
+    .slider-row .irs-bar { background-color: #1B4332 !important; border-top-color: #1B4332 !important; border-bottom-color: #1B4332 !important; }
+    .slider-row .irs-handle { border-color: #1B4332 !important; background-color: #ffffff !important; }
+    .slider-row .irs-single, .slider-row .irs-from, .slider-row .irs-to { background-color: #1B4332 !important; color: white !important; font-weight: bold; }
+    .slider-row .irs-min, .slider-row .irs-max { display: none !important; }
+    .slider-row .irs-grid-pol.small { display: none !important; }
+    .slider-row .irs-grid-pol { background-color: #1B4332 !important; width: 2px !important; height: 8px !important; }
+    .slider-row .irs-grid-text { color: #1B4332 !important; font-weight: 500; }
 
     .motivo-buttons { margin-top: -10px; margin-left: 15px; }
     .motivo-buttons label.btn {
@@ -484,7 +488,22 @@ ui <- page_fluid(
           div(
             class = "slider-row",
             tags$div(style = "font-size: 11px; font-weight: bold; color: #555; text-align: center;", "Ajustar período"),
-            sliderInput("filtro_anio", NULL, min = as.numeric(min(anios_str)), max = as.numeric(max(anios_str)), value = c(as.numeric(min(anios_str)), as.numeric(max(anios_str))), step = 1, sep = "", width = "100%")
+            sliderInput("filtro_anio", NULL, min = as.numeric(min(anios_str)), max = as.numeric(max(anios_str)), value = c(as.numeric(min(anios_str)), as.numeric(max(anios_str))), step = 1, sep = "", width = "100%"),
+            tags$script(HTML("
+              document.addEventListener('DOMContentLoaded', function() {
+                var container = document.querySelector('.slider-row');
+                if(container) {
+                  var blockClick = function(e) {
+                    if (!e.target.closest('.irs-handle')) {
+                      e.stopPropagation();
+                      e.preventDefault();
+                    }
+                  };
+                  container.addEventListener('mousedown', blockClick, true);
+                  container.addEventListener('touchstart', blockClick, true);
+                }
+              });
+            "))
           )
         ),
         shinyjs::hidden(div(
@@ -714,6 +733,10 @@ server <- function(input, output, session) {
     } else {
       updateSliderInput(session, "filtro_anio", min = as.numeric(min(anios_str)))
     }
+
+    # Forzar que el slider muestre una rayita/label para TODOS los posibles años
+    # (grid_snap = true, se alinea con step = 1 del slider)
+    shinyjs::delay(150, shinyjs::runjs("$('#filtro_anio').data('ionRangeSlider').update({grid: true, grid_snap: true});"))
     # Mostrar el waiter del modo activo de forma inmediata.
     # Con req(input$modo_vista == X) en cada renderGirafe, el render SIEMPRE
     # se re-ejecuta al volver a la pestaña, por lo que on.exit(hide()) siempre corre.
@@ -1544,18 +1567,18 @@ server <- function(input, output, session) {
     req(input$modo_vista == "TABLA")
     w_tabla$show()
     on.exit(w_tabla$hide(), add = TRUE)
-    d <- datos_filtrados_motivo() %>% 
-      filter(Anio >= as.character(input$filtro_anio[1]) & Anio <= as.character(input$filtro_anio[2]))
-    
+    d <- datos_filtrados_motivo()
+
     # Seleccionar y renombrar columnas
-    d <- d %>% select(
-      Fecha = `FECHA DENUNCIA`,
-      Departamento = Depto_Limpio,
-      Municipio = Muni_Limpio,
-      `Motivo Agrupado` = MOTIVO_AGRUPADO,
-      Expediente,
-      `Derivación` = Derivacion
-    ) %>%
+    d <- d %>%
+      select(
+        Fecha = `FECHA DENUNCIA`,
+        Departamento = Depto_Limpio,
+        Municipio = Muni_Limpio,
+        `Motivo Agrupado` = MOTIVO_AGRUPADO,
+        Expediente,
+        `Derivación` = Derivacion
+      ) %>%
       mutate(
         Expediente = ifelse(
           Expediente != "No registra",
@@ -1563,7 +1586,7 @@ server <- function(input, output, session) {
           Expediente
         )
       )
-    
+
     DT::datatable(
       d,
       selection = "none",
@@ -1571,7 +1594,7 @@ server <- function(input, output, session) {
       options = list(
         pageLength = 10,
         scrollX = TRUE,
-        order = list(list(0, 'desc')),
+        order = list(list(0, "desc")),
         pagingType = "full_numbers",
         language = list(
           search = "Buscar:",
