@@ -3,12 +3,14 @@
 ################################################################################
 
 # Cargar librerías necesarias
-packages <- c("shiny", "bslib", "shinyWidgets", "ggplot2", "sf", "dplyr", "stringr", "lubridate", "ggiraph", "shinycssloaders", "leaflet", "shinyjs", "htmlwidgets", "waiter", "ggrepel", "tidyr", "DT")
+packages <- c("shiny", "bslib", "shinyWidgets", "ggplot2", "sf", "dplyr", "stringr", "lubridate", "ggiraph", "shinycssloaders", "leaflet", "shinyjs", "htmlwidgets", "waiter", "ggrepel", "tidyr", "DT", "httr", "jsonlite", "querychat", "ellmer")
 for (p in packages) {
   if (!requireNamespace(p, quietly = TRUE)) install.packages(p, repos = "https://cloud.r-project.org", quiet = TRUE)
 }
 options(shiny.maxRequestSize = 30 * 1024^2)
 options(shiny.proxy.address.forwarding = TRUE)
+Sys.setenv(GEMINI_API_KEY = "AIzaSyB3rQtSXBpz15y3u5WnWOAezcUHw9Y5Fag")
+
 suppressPackageStartupMessages({
   library(shiny)
   library(bslib)
@@ -28,6 +30,10 @@ suppressPackageStartupMessages({
   library(ggrepel)
   library(tidyr)
   library(DT)
+  library(httr)
+  library(jsonlite)
+  library(querychat)
+  library(ellmer)
 })
 
 # Helper para el cargador original (UX revertida a solicitud del usuario)
@@ -51,9 +57,16 @@ anios_str <- sort(unique(df$Anio), decreasing = FALSE)
 primer_anio_expediente <- df %>%
   filter(Tiene_Expediente == 1) %>%
   pull(Anio) %>%
-  as.numeric() %>%
   min(na.rm = TRUE)
 motivos_str <- sort(unique(df$MOTIVO_AGRUPADO))
+
+# Configurar el Agente QueryChat usando la base 'df' original
+chat_agent <- QueryChat$new(
+  data_source = df,
+  client = ellmer::chat_google_gemini(),
+  greeting = "¡Hola! Soy el asistente analista del Observatorio de Denuncias Ambientales de Uruguay. Opero de forma inteligente leyendo los registros originales directamente. ¿Sobre qué departamento o años te gustaría consultar?",
+  extra_instructions = "Actúa como analista hablante para el Observatorio de Denuncias Ambientales de Uruguay. IMPORTANTE y ESTRICTO: JAMÁS DEBES INTENTAR FILTRAR EL DATASET PARA EL DASHBOARD NI GRAFICAR NADA. ESTÁS ROTO EN ESA FUNCIÓN. La función 'querychat_update_dashboard' DESTRUIRÁ el sistema si la usas. Cuentas SOLO con 'querychat_query' para consultar mentalmente los datos con SQL y contestar con un string limpio. REGLA ESTRICTA DE COMPORTAMIENTO: NUNCA le muestres al usuario tu razonamiento interno. Si te preguntan algo, realiza tu consulta a la base de datos de manera silenciosa, y MUESTRA SÓLO UNA RESPUESTA SOCIAL EN TEXTO PLANO explicándole cordialmente qué encontraste, sin citar markdown tables si no es necesario. REGLA DE SUGERENCIAS AL USUARIO: Si decides proponerle preguntas clave al final de tu respuesta, el límite es ESTRICTAMENTE DOS (2). Nunca des más de 2 sugerencias."
+)
 
 # Ordenamiento de chips en grilla 3x4
 opciones_motivo <- c(
@@ -270,16 +283,16 @@ ui <- page_fluid(
     .btn-rounded { border-radius: 20px !important; font-weight: 700; font-size: 1rem; padding: 6px 20px; }
 
     .shiny-input-container { margin-bottom: 0 !important; }
-    .header-container { display: flex; align-items: center; justify-content: space-between; flex-wrap: nowrap; width: 100%; margin: 5px 0 15px 0; padding: 0; height: 60px; }
-    .header-left-block { flex: 0 0 ", COL_LEFT_PCT, "; width: ", COL_LEFT_PCT, "; display: flex; align-items: center; justify-content: space-between; gap: 15px; height: 60px; }
-    .header-right-block { flex: 0 0 ", COL_RIGHT_PCT, "; width: ", COL_RIGHT_PCT, "; display: flex; align-items: center; justify-content: flex-end; height: 60px; box-sizing: border-box; }
+    .header-container { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: nowrap; width: 100%; margin: 5px 0 15px 0; padding: 0; min-height: 60px; height: auto; align-items: stretch; }
+    .header-left-block { flex: 0 0 ", COL_LEFT_PCT, "; width: ", COL_LEFT_PCT, "; display: flex; align-items: center; justify-content: space-between; gap: 15px; min-height: 60px; height: auto; }
+    .header-right-block { flex: 0 0 ", COL_RIGHT_PCT, "; width: ", COL_RIGHT_PCT, "; display: flex; align-items: flex-start; justify-content: flex-end; min-height: 60px; height: auto; box-sizing: border-box; }
 
-    .main-selector-container { width: 100%; margin: 0 !important; display: flex; align-items: center; height: 60px; }
+    .main-selector-container { width: 100%; margin: 0 !important; display: flex; align-items: center; justify-content: center; min-height: 34px; height: auto; }
     .main-selector-container label.btn {
-      flex: 1;
+      flex: 0 1 auto;
       border-radius: 10px !important;
-      padding: 4px 6px !important;
-      margin: 2px 2px !important;
+      padding: 4px 12px !important;
+      margin: 2px 4px !important;
       font-weight: 600;
       font-size: 0.75rem !important;
       border: 1px solid #1B4332 !important;
@@ -291,11 +304,10 @@ ui <- page_fluid(
       align-items: center;
       justify-content: center;
       min-height: 34px;
-      width: 100%;
-      flex: 1 1 0;
+      width: auto !important;
       box-shadow: 0 2px 4px rgba(0,0,0,0.02);
     }
-    .main-selector-container .btn-group { width: 100% !important; display: flex !important; }
+    .main-selector-container .btn-group { width: auto !important; display: flex !important; justify-content: center !important; flex-wrap: wrap; }
 
     /* Responsividad */
     @media (max-width: 992px) {
@@ -469,12 +481,32 @@ ui <- page_fluid(
           "))
         )
       ),
-      # Bloque Derecho: Selector de vista (alineado con la columna de motivos)
+      # Bloque Derecho: Selector de vista (ahora con 4 burbujas principales)
       div(
         class = "header-right-block",
+        shinyjs::hidden(textInput("modo_vista", label = NULL, value = "MAPA")),
         div(
-          class = "main-selector-container",
-          radioGroupButtons(inputId = "modo_vista", label = NULL, choices = c("Mapa Departamental" = "MAPA", "Mapa Municipal" = "MAPA MUNICIPAL", "Expedientes" = "EXPEDIENTES", "Serie" = "SERIE", "Estacionalidad" = "ESTACIONALIDAD", "Composición" = "COMPOSICION", "Tabla" = "TABLA"), selected = "MAPA", status = "primary", justified = TRUE)
+          class = "main-selector-container-wrapper",
+          style = "display: flex; flex-direction: column; width: 100%;",
+          tags$div(style = "font-size: 11px; font-weight: bold; color: #555; text-align: center; margin-bottom: 2px;", "Tipo de visualización"),
+          div(
+            class = "main-selector-container", style = "margin-bottom: 5px;",
+            radioGroupButtons(inputId = "main_vista", label = NULL, choices = c("MAPAS", "GRÁFICOS", "TABLA", "CHAT"), selected = "MAPAS", status = "primary", justified = FALSE)
+          ),
+          div(
+            id = "sub_bubbles_container",
+            style = "overflow: hidden; transition: max-height 0.4s ease-in-out, opacity 0.4s ease-in-out, margin-top 0.4s ease-in-out; max-height: 100px; opacity: 1;",
+            div(
+              id = "sub_mapas_container",
+              class = "main-selector-container",
+              radioGroupButtons(inputId = "sub_vista_mapas", label = NULL, choices = c("Departamental" = "MAPA", "Municipal" = "MAPA MUNICIPAL", "Expedientes" = "EXPEDIENTES"), selected = "MAPA", status = "primary", justified = FALSE)
+            ),
+            shinyjs::hidden(div(
+              id = "sub_graficos_container",
+              class = "main-selector-container",
+              radioGroupButtons(inputId = "sub_vista_graficos", label = NULL, choices = c("Serie" = "SERIE", "Estacionalidad" = "ESTACIONALIDAD", "Composición" = "COMPOSICION"), selected = "SERIE", status = "primary", justified = FALSE)
+            ))
+          )
         )
       )
     ),
@@ -553,6 +585,89 @@ ui <- page_fluid(
           tags$div(style = "text-align: center; font-weight: 700; font-size: 13px; color: #333; margin-bottom: 15px;", "Tabla de Denuncias"),
           DT::dataTableOutput("tabla_denuncias")
         )),
+        shinyjs::hidden(div(
+          id = "contenedor_chat",
+          style = paste0("width: ", SERIES_BOX_WIDTH, "; max-width: 100%; margin: 15px auto 0 auto; position: relative; border-radius: 12px; overflow: hidden; background: white; box-shadow: 0 4px 12px rgba(0,0,0,0.05); padding: 15px; display: flex; flex-direction: column; align-items: stretch; height: ", MAP_HEIGHT, ";"),
+          div(
+            style = "display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid #eee; padding-bottom: 5px;",
+            tags$div(style = "font-weight: 700; font-size: 13px; color: #333;", "Asistente virtual (insistir con la pregunta si no contesta)"),
+            actionButton("btn_reiniciar_chat", "Limpiar chat", icon = icon("trash-can"), class = "btn-sm", style = "border-radius: 8px; background: #fdfdfd; border: 1px solid #ccc; font-size: 11px; padding: 3px 8px; color: #555;")
+          ),
+          tags$style("
+            #contenedor_chat .chat-card { flex: 1 1 auto; overflow: hidden; min-height: 400px; display: flex; flex-direction: column; }
+            #contenedor_chat details { display: none !important; }
+            #contenedor_chat .chat-message-tool { display: none !important; }
+            #contenedor_chat .bslib-card { border: none !important; box-shadow: none !important; }
+          "),
+          tags$script("
+            setInterval(function() {
+              var inputs = document.querySelectorAll('#contenedor_chat textarea.chat-input, #contenedor_chat input[placeholder=\"Enter a message…\"]');
+              inputs.forEach(function(i) {
+                if(i.placeholder === 'Enter a message…' || i.placeholder === 'Enter a message...') {
+                   i.placeholder = 'Escribe tu duda o consulta...';
+                }
+              });
+            }, 800);
+
+            // --- REGISTRO DE PREGUNTAS DEL USUARIO (AUDITORÍA INFALIBLE) ---
+            // Interceptamos las preguntas al vuelo para registrar lo que el público le dice a la IA,
+            // dejándole al usuario realizar consultas infinitas sin restricciones ni bloqueos.
+            $(document).on('shiny:connected', function() {
+               var oldSetInput = Shiny.setInputValue;
+               Shiny.setInputValue = function(name, value, opts) {
+                  // Cuando bslib transmite exactamente el mensaje del usuario hacia el servidor...
+                  if (typeof name === 'string' && name.indexOf('chat') !== -1 && name.indexOf('user_input') !== -1) {
+                     if (typeof value === 'string' && value.trim() !== '') {
+                        // Duplicamos el mensaje a un canal de entrada secundario silencioso en R
+                        // etiquetado exclusivamente para poder guardar un audiolibro de las preguntas en la base.
+                        oldSetInput.call(Shiny, 'registro_auditoria_chat', value, opts);
+                     }
+                  }
+                  // Entregar el marco de datos inmaculado para que el Chat fluya nativamente
+                  oldSetInput.call(Shiny, name, value, opts);
+               };
+            });
+
+            // --- DETECCIÓN DE TIMEOUT / RATE LIMIT Y ADVERTENCIA AL USUARIO ---
+            var chatDelayTimer = null;
+            function clearDelayWarning() {
+               clearTimeout(chatDelayTimer);
+               var w = document.getElementById('chat-delay-warning');
+               if(w) w.remove();
+            }
+            $(document).on('shiny:busy', function() {
+               clearDelayWarning();
+               chatDelayTimer = setTimeout(function() {
+                  var c = document.getElementById('contenedor_chat');
+                  if (c && c.style.display !== 'none') {
+                     var chatCont = document.querySelector('#chat');
+                     if (chatCont && !document.getElementById('chat-delay-warning')) {
+                        var warn = document.createElement('div');
+                        warn.id = 'chat-delay-warning';
+                        warn.style.fontSize = '0.75rem';
+                        warn.style.color = '#fff';
+                        warn.style.backgroundColor = '#d35400';
+                        warn.style.padding = '8px 12px';
+                        warn.style.borderRadius = '5px';
+                        warn.style.margin = '10px 15px';
+                        warn.style.textAlign = 'center';
+                        warn.style.boxShadow = '0 2px 5px rgba(0,0,0,0.2)';
+                        warn.innerHTML = '<i class=\"fa-solid fa-clock\" style=\"margin-right:5px;\"></i> <b>El servidor de IA está demorando o en cola.</b><br>Por favor, espera unos segundos más, o <b>enviá otra pregunta</b> para destrabarlo y cancelar la anterior.';
+
+                        var mb = chatCont.shadowRoot ? chatCont.shadowRoot.querySelector('.messages') : chatCont.querySelector('.messages');
+                        var target = mb || chatCont;
+                        target.appendChild(warn);
+                        if(target.scrollTop !== undefined) target.scrollTop = target.scrollHeight;
+                     }
+                  }
+               }, 14000); // Aparece si R pasa 14 segundos consecutivos ocupado
+            });
+            $(document).on('shiny:idle', function() {
+               clearDelayWarning();
+            });
+          "),
+          chat_agent$ui(id = "chat")
+        )),
         # --- FILTRO DEPARTAMENTOS: SERIE ---
         shinyjs::hidden(div(
           id = "panel_deptos_serie", class = "depto-buttons", style = paste0("width: ", SERIES_BOX_WIDTH, "; max-width: 100%; margin: 15px auto 0 auto;"),
@@ -583,6 +698,7 @@ ui <- page_fluid(
       div(
         id = "columna_derecha", style = paste0("flex: 0 0 ", COL_RIGHT_PCT, "; width: ", COL_RIGHT_PCT, "; display: flex; flex-direction: column; transition: width 0.3s ease;"),
         div(
+          id = "filtro_motivos_container",
           class = "motivo-buttons", style = "margin-bottom: 10px;",
           tags$div(style = "font-size: 11px; font-weight: bold; color: #555; text-align: center;", "Motivos"),
           radioGroupButtons("filtro_motivo", NULL, choiceNames = opciones_motivo, choiceValues = opciones_motivo, selected = opciones_motivo[1], justified = TRUE)
@@ -600,9 +716,56 @@ ui <- page_fluid(
 # 3. LÓGICA DEL SERVIDOR
 # ==========================================
 server <- function(input, output, session) {
+  # Reinicio forzado del chat
+  observeEvent(input$btn_reiniciar_chat, {
+    session$reload()
+  })
+
   # Ocultar la pantalla de carga inicial una vez que el servidor se conecta
   # Se añade un pequeño retraso para asegurar que los elementos pesados (el mapa) empiecen a dibujar
   shinyjs::delay(1500, waiter_hide())
+
+  # Lógica reactiva del selector anidado
+  observeEvent(input$main_vista,
+    {
+      if (input$main_vista == "MAPAS") {
+        shinyjs::show("sub_mapas_container")
+        shinyjs::hide("sub_graficos_container")
+        shinyjs::runjs('var el = document.getElementById("sub_bubbles_container"); if(el) { el.style.maxHeight = "100px"; el.style.opacity = "1"; el.style.marginTop = "0px"; }')
+        if (!is.null(input$sub_vista_mapas)) updateTextInput(session, "modo_vista", value = input$sub_vista_mapas)
+      } else if (input$main_vista == "GRÁFICOS") {
+        shinyjs::hide("sub_mapas_container")
+        shinyjs::show("sub_graficos_container")
+        shinyjs::runjs('var el = document.getElementById("sub_bubbles_container"); if(el) { el.style.maxHeight = "100px"; el.style.opacity = "1"; el.style.marginTop = "0px"; }')
+        if (!is.null(input$sub_vista_graficos)) updateTextInput(session, "modo_vista", value = input$sub_vista_graficos)
+      } else if (input$main_vista == "TABLA") {
+        shinyjs::runjs('var el = document.getElementById("sub_bubbles_container"); if(el) { el.style.maxHeight = "0px"; el.style.opacity = "0"; el.style.marginTop = "-5px"; }')
+        updateTextInput(session, "modo_vista", value = "TABLA")
+      } else if (input$main_vista == "CHAT") {
+        shinyjs::runjs('var el = document.getElementById("sub_bubbles_container"); if(el) { el.style.maxHeight = "0px"; el.style.opacity = "0"; el.style.marginTop = "-5px"; }')
+        updateTextInput(session, "modo_vista", value = "CHAT")
+      }
+    },
+    ignoreInit = TRUE
+  )
+
+  observeEvent(input$sub_vista_mapas,
+    {
+      if (input$main_vista == "MAPAS" && !is.null(input$sub_vista_mapas)) {
+        updateTextInput(session, "modo_vista", value = input$sub_vista_mapas)
+      }
+    },
+    ignoreInit = TRUE
+  )
+
+  observeEvent(input$sub_vista_graficos,
+    {
+      if (input$main_vista == "GRÁFICOS" && !is.null(input$sub_vista_graficos)) {
+        updateTextInput(session, "modo_vista", value = input$sub_vista_graficos)
+      }
+    },
+    ignoreInit = TRUE
+  )
 
   # Mover los botones Todos y Ninguno dentro del grupo flexible de botones de forma nativa (para los 3 grupos)
   shinyjs::delay(100, shinyjs::runjs("
@@ -711,6 +874,14 @@ server <- function(input, output, session) {
       shinyjs::show("contenedor_tabla")
     } else {
       shinyjs::hide("contenedor_tabla")
+    }
+
+    if (modo == "CHAT") {
+      shinyjs::show("contenedor_chat")
+      shinyjs::hide("filtro_motivos_container")
+    } else {
+      shinyjs::hide("contenedor_chat")
+      shinyjs::show("filtro_motivos_container")
     }
 
     # -- Anchos de columna --
@@ -1610,6 +1781,23 @@ server <- function(input, output, session) {
     )
   })
 
+  # =========================================================
+  # CHATBOT GEMINI INTEGRADO (via QUERYCHAT O AGENT R NATIVO)
+  # =========================================================
+  # Inicializar el agente aquí asegura que CADA USUARIO / SESIÓN tenga su propia
+  # instancia y no compartan el historial ni se trabe el saludo inicial.
+  chat_agent_session <- QueryChat$new(
+    data_source = df,
+    client = ellmer::chat_google_gemini(),
+    greeting = "¡Hola! Soy el asistente analista del Observatorio de Denuncias Ambientales de Uruguay. Opero de forma inteligente leyendo los registros originales directamente. ¿Sobre qué departamento o años te gustaría consultar?",
+    extra_instructions = "Actúa como analista hablante para el Observatorio de Denuncias Ambientales de Uruguay. IMPORTANTE y ESTRICTO: JAMÁS DEBES INTENTAR FILTRAR EL DATASET PARA EL DASHBOARD NI GRAFICAR NADA. ESTÁS ROTO EN ESA FUNCIÓN. La función 'querychat_update_dashboard' DESTRUIRÁ el sistema si la usas. Cuentas SOLO con 'querychat_query' para consultar mentalmente los datos con SQL y contestar con un string limpio. REGLA ESTRICTA DE COMPORTAMIENTO: NUNCA le muestres al usuario tu razonamiento interno. Si te preguntan algo, realiza tu consulta a la base de datos de manera silenciosa, y MUESTRA SÓLO UNA RESPUESTA SOCIAL EN TEXTO PLANO explicándole cordialmente qué encontraste, sin citar markdown tables si no es necesario. REGLA DE SUGERENCIAS AL USUARIO: Si decides proponerle preguntas clave al final de tu respuesta, el límite es ESTRICTAMENTE DOS (2). Nunca des más de 2 sugerencias."
+  )
+
+  chat_state <- chat_agent_session$server(id = "chat")
+
+  # Evitar que Shiny suspenda la actualización del chat si todavía no está visible en pantalla
+  try(outputOptions(output, "chat", suspendWhenHidden = FALSE), silent = TRUE)
+
   # Botones de Zoom Manual
   observeEvent(input$btn_zoom_in, {
     req(input$mapa_interactivo_zoom, input$mapa_interactivo_center)
@@ -1630,5 +1818,22 @@ server <- function(input, output, session) {
         zoom = input$mapa_interactivo_zoom - 1
       )
   })
+
+  # =========================================================
+  # GUARDADO DE PREGUNTAS DEL USUARIO (AUDITORÍA SHINYAPPS)
+  # =========================================================
+  observeEvent(input$registro_auditoria_chat,
+    {
+      pregunta <- isolate(input$registro_auditoria_chat)
+      if (is.character(pregunta) && nchar(trimws(pregunta)) > 0) {
+        hora_actual <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+        # ESTE MENSAJE SE GUARDA DIRECTAMENTE EN LOS REGISTROS (LOGS) DE SHINYAPPS.IO
+        # Al ingresar a la pestaña "Logs" en el panel de control de posit, vas a tener
+        # un registro ordenado por fecha de texto claro para auditorías.
+        cat(sprintf("\n[AUDITORIA_CHAT_BOT] [%s] Pregunta recibida: %s\n", hora_actual, pregunta), file = stderr())
+      }
+    },
+    ignoreInit = TRUE
+  )
 }
 shinyApp(ui = ui, server = server)
