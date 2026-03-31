@@ -3,13 +3,17 @@
 ################################################################################
 
 # Cargar librerías necesarias
-packages <- c("shiny", "bslib", "shinyWidgets", "ggplot2", "sf", "dplyr", "stringr", "lubridate", "ggiraph", "shinycssloaders", "leaflet", "shinyjs", "htmlwidgets", "waiter", "ggrepel", "tidyr", "DT", "httr", "jsonlite", "querychat", "ellmer")
+packages <- c("shiny", "bslib", "shinyWidgets", "ggplot2", "sf", "dplyr", "stringr", "lubridate", "ggiraph", "shinycssloaders", "leaflet", "shinyjs", "htmlwidgets", "waiter", "ggrepel", "tidyr", "DT", "httr", "jsonlite", "querychat", "ellmer", "duckdb")
 for (p in packages) {
   if (!requireNamespace(p, quietly = TRUE)) install.packages(p, repos = "https://cloud.r-project.org", quiet = TRUE)
 }
 options(shiny.maxRequestSize = 30 * 1024^2)
 options(shiny.proxy.address.forwarding = TRUE)
-Sys.setenv(GEMINI_API_KEY = "AIzaSyB3rQtSXBpz15y3u5WnWOAezcUHw9Y5Fag")
+
+# La clave API se carga dinámicamente usando un archivo fantasma de R
+if (file.exists("secrets.R")) {
+  source("secrets.R")
+}
 
 suppressPackageStartupMessages({
   library(shiny)
@@ -34,6 +38,7 @@ suppressPackageStartupMessages({
   library(jsonlite)
   library(querychat)
   library(ellmer)
+  library(duckdb)
 })
 
 # Helper para el cargador original (UX revertida a solicitud del usuario)
