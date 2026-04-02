@@ -3,7 +3,7 @@
 ################################################################################
 
 # Cargar librerías necesarias
-packages <- c("shiny", "bslib", "shinyWidgets", "ggplot2", "sf", "dplyr", "stringr", "lubridate", "ggiraph", "shinycssloaders", "leaflet", "shinyjs", "htmlwidgets", "waiter", "ggrepel", "tidyr", "DT", "httr", "jsonlite", "querychat", "ellmer", "duckdb")
+packages <- c("shiny", "bslib", "shinyWidgets", "ggplot2", "sf", "dplyr", "stringr", "lubridate", "ggiraph", "shinycssloaders", "leaflet", "shinyjs", "htmlwidgets", "waiter", "ggrepel", "tidyr", "DT", "httr", "jsonlite", "querychat", "ellmer", "duckdb", "networkD3")
 for (p in packages) {
   if (!requireNamespace(p, quietly = TRUE)) install.packages(p, repos = "https://cloud.r-project.org", quiet = TRUE)
 }
@@ -39,6 +39,7 @@ suppressPackageStartupMessages({
   library(querychat)
   library(ellmer)
   library(duckdb)
+  library(networkD3)
 })
 
 # Helper para el cargador original (UX revertida a solicitud del usuario)
@@ -63,6 +64,15 @@ primer_anio_expediente <- df %>%
   filter(Tiene_Expediente == 1) %>%
   pull(Anio) %>%
   min(na.rm = TRUE)
+
+# Años posibles para el panel Derivaciones (donde hay información)
+anios_deriv <- df %>%
+  filter(!is.na(Derivacion) & Derivacion != "" & tolower(Derivacion) != "no registra" & tolower(Derivacion) != "na" & tolower(Derivacion) != "none") %>%
+  pull(Anio) %>%
+  as.numeric()
+
+min_anio_deriv <- min(anios_deriv, na.rm = TRUE)
+max_anio_deriv <- max(anios_deriv, na.rm = TRUE)
 motivos_str <- sort(unique(df$MOTIVO_AGRUPADO))
 
 # Configurar el Agente QueryChat usando la base 'df' original
@@ -126,6 +136,16 @@ lista_deptos_vals <- sort(unique(uruguay_mapa$Depto_Limpio))
 lista_deptos_nombres <- stringr::str_to_title(tolower(lista_deptos_vals))
 lista_deptos_nombres <- gsub(" Y ", " y ", lista_deptos_nombres)
 lista_deptos <- setNames(lista_deptos_vals, lista_deptos_nombres)
+
+poblacion_2023 <- c(
+  "ARTIGAS" = 73378, "CANELONES" = 588699, "CERRO LARGO" = 84698,
+  "COLONIA" = 122863, "DURAZNO" = 58581, "FLORES" = 25050,
+  "FLORIDA" = 67048, "LAVALLEJA" = 58737, "MALDONADO" = 192555,
+  "MONTEVIDEO" = 1380432, "PAYSANDU" = 113124, "RIO NEGRO" = 54765,
+  "RIVERA" = 103493, "ROCHA" = 68088, "SALTO" = 124871,
+  "SAN JOSE" = 108309, "SORIANO" = 82595, "TACUAREMBO" = 90053,
+  "TREINTA Y TRES" = 48134
+)
 
 # Definir paleta de colores fija para Serie Histórica
 colores_departamentos_vivos <- c(
@@ -504,12 +524,12 @@ ui <- page_fluid(
             div(
               id = "sub_mapas_container",
               class = "main-selector-container",
-              radioGroupButtons(inputId = "sub_vista_mapas", label = NULL, choices = c("Departamental" = "MAPA", "Municipal" = "MAPA MUNICIPAL", "Expedientes" = "EXPEDIENTES"), selected = "MAPA", status = "primary", justified = FALSE)
+              radioGroupButtons(inputId = "sub_vista_mapas", label = NULL, choices = c("Departamental" = "MAPA", "Municipal" = "MAPA MUNICIPAL", "Expedientes" = "EXPEDIENTES", "Población" = "POBLACION"), selected = "MAPA", status = "primary", justified = FALSE)
             ),
             shinyjs::hidden(div(
               id = "sub_graficos_container",
               class = "main-selector-container",
-              radioGroupButtons(inputId = "sub_vista_graficos", label = NULL, choices = c("Serie" = "SERIE", "Estacionalidad" = "ESTACIONALIDAD", "Composición" = "COMPOSICION"), selected = "SERIE", status = "primary", justified = FALSE)
+              radioGroupButtons(inputId = "sub_vista_graficos", label = NULL, choices = c("Serie" = "SERIE", "Estacionalidad" = "ESTACIONALIDAD", "Composición" = "COMPOSICION", "Derivaciones" = "DERIVACIONES"), selected = "SERIE", status = "primary", justified = FALSE)
             ))
           )
         )
@@ -583,6 +603,16 @@ ui <- page_fluid(
           style = "width: 100%; max-width: 100%; margin: 15px auto 0 auto; position: relative; border-radius: 12px; overflow: hidden; background: white; box-shadow: 0 4px 12px rgba(0,0,0,0.05);",
           tags$div(style = "text-align: center; font-weight: 700; font-size: 13px; color: #333; padding: 12px 0 4px 0; background: white;", "Composici\u00f3n de sub-motivos"),
           girafeOutput("grafico_composicion", height = SERIES_HEIGHT)
+        )),
+        shinyjs::hidden(div(
+          id = "contenedor_derivaciones",
+          style = paste0("width: ", SERIES_BOX_WIDTH, "; max-width: 100%; margin: 15px auto 0 auto; position: relative; border-radius: 12px; overflow: hidden; background: white; box-shadow: 0 4px 12px rgba(0,0,0,0.05); padding: 10px;"),
+          tags$div(style = "text-align: center; font-weight: 700; font-size: 13px; color: #333; padding: 5px 0 10px 0; background: white;", "Derivaciones Administrativas"),
+          div(
+            class = "slider-row", style = "margin-bottom: 20px; padding: 0 15px;",
+            sliderInput("filtro_anio_deriv", NULL, min = min_anio_deriv, max = max_anio_deriv, value = c(min_anio_deriv, max_anio_deriv), step = 1, sep = "", width = "100%")
+          ),
+          networkD3::sankeyNetworkOutput("grafico_derivaciones", height = SERIES_HEIGHT)
         )),
         shinyjs::hidden(div(
           id = "contenedor_tabla",
@@ -772,7 +802,7 @@ server <- function(input, output, session) {
     ignoreInit = TRUE
   )
 
-  # Mover los botones Todos y Ninguno dentro del grupo flexible de botones de forma nativa (para los 3 grupos)
+  # Mover los botones Todos y Ninguno dentro del grupo flexible de botones de forma nativa
   shinyjs::delay(100, shinyjs::runjs("
     $('#filtro_deptos_serie .btn-group').prepend($('#btn_desel_serie')).prepend($('#btn_sel_serie'));
     $('#filtro_deptos_estacional .btn-group').prepend($('#btn_desel_estacional')).prepend($('#btn_sel_estacional'));
@@ -784,6 +814,7 @@ server <- function(input, output, session) {
   w_serie <- Waiter$new(id = "grafico_serie", html = make_waiter_html(), color = "rgba(255,255,255,0.85)")
   w_estacional <- Waiter$new(id = "grafico_estacional", html = make_waiter_html(), color = "rgba(255,255,255,0.85)")
   w_composicion <- Waiter$new(id = "grafico_composicion", html = make_waiter_html(), color = "rgba(255,255,255,0.85)")
+  w_derivaciones <- Waiter$new(id = "grafico_derivaciones", html = make_waiter_html(), color = "rgba(255,255,255,0.85)")
   w_tabla <- Waiter$new(id = "tabla_denuncias", html = make_waiter_html(), color = "rgba(255,255,255,0.85)")
 
   # Valores reactivos para estado de hover
@@ -838,8 +869,9 @@ server <- function(input, output, session) {
 
   observeEvent(input$modo_vista, {
     modo <- input$modo_vista
-    es_mapa <- modo %in% c("MAPA", "MAPA MUNICIPAL", "EXPEDIENTES")
+    es_mapa <- modo %in% c("MAPA", "MAPA MUNICIPAL", "EXPEDIENTES", "POBLACION")
     es_serie <- modo == "SERIE"
+    es_derivaciones <- modo == "DERIVACIONES"
     # -- Visibilidad de contenedores --
     if (es_mapa) {
       shinyjs::show("controles_mapa")
@@ -873,6 +905,12 @@ server <- function(input, output, session) {
     } else {
       shinyjs::hide("contenedor_composicion")
       shinyjs::hide("panel_deptos_composicion")
+    }
+
+    if (es_derivaciones) {
+      shinyjs::show("contenedor_derivaciones")
+    } else {
+      shinyjs::hide("contenedor_derivaciones")
     }
 
     if (modo == "TABLA") {
@@ -911,12 +949,8 @@ server <- function(input, output, session) {
     }
 
     # Forzar que el slider muestre una rayita/label para TODOS los posibles años
-    # (grid_snap = true, se alinea con step = 1 del slider)
     shinyjs::delay(150, shinyjs::runjs("$('#filtro_anio').data('ionRangeSlider').update({grid: true, grid_snap: true});"))
-    # Mostrar el waiter del modo activo de forma inmediata.
-    # Con req(input$modo_vista == X) en cada renderGirafe, el render SIEMPRE
-    # se re-ejecuta al volver a la pestaña, por lo que on.exit(hide()) siempre corre.
-    # Esto elimina la condición de carrera anterior.
+    shinyjs::delay(150, shinyjs::runjs("if($('#filtro_anio_deriv').data('ionRangeSlider')) { $('#filtro_anio_deriv').data('ionRangeSlider').update({grid: true, grid_snap: true}); }"))
     if (es_mapa) {
       w_mapa$show()
     } else if (es_serie) {
@@ -925,6 +959,8 @@ server <- function(input, output, session) {
       w_estacional$show()
     } else if (modo == "COMPOSICION") {
       w_composicion$show()
+    } else if (modo == "DERIVACIONES") {
+      w_derivaciones$show()
     } else if (modo == "TABLA") w_tabla$show()
   })
 
@@ -1083,6 +1119,42 @@ server <- function(input, output, session) {
       st_as_sf()
   })
 
+  # 2.8 Datos para el mapa de POBLACIÓN (tasa de denuncias por 10,000 hab. según Censo 2023)
+  datos_poblacion <- reactive({
+    req(input$filtro_anio)
+    col_motivo <- colores_motivos[[input$filtro_motivo %||% "Todos los motivos"]]
+    d_base <- datos_filtrados_motivo()
+    d <- d_base %>%
+      filter(Anio >= as.character(input$filtro_anio[1]) & Anio <= as.character(input$filtro_anio[2]))
+
+    base <- d %>%
+      group_by(Depto_Limpio) %>%
+      summarise(
+        D_Tot = n(),
+        .groups = "drop"
+      ) %>%
+      mutate(
+        Pob = poblacion_2023[Depto_Limpio],
+        Tasa_Pob = round((D_Tot / Pob) * 10000, 2),
+        TooltipHTML = paste0(
+          "<div style='font-size:13px; margin-bottom:4px; line-height:1.3;'>",
+          "<b style='color:", col_motivo, ";'>", Tasa_Pob, "</b> denuncias<br>cada 10.000 hab.</div>"
+        )
+      )
+
+    uruguay_mapa %>%
+      left_join(base, by = "Depto_Limpio") %>%
+      mutate(
+        D_Tot = ifelse(is.na(D_Tot), 0, D_Tot),
+        Pob = ifelse(is.na(Pob), poblacion_2023[Depto_Limpio], Pob),
+        Tasa_Pob = ifelse(is.na(Tasa_Pob), 0, Tasa_Pob),
+        TooltipHTML = ifelse(is.na(TooltipHTML),
+          "<div style='color:#999;font-size:12px;'>0 Registros</div>", TooltipHTML
+        )
+      ) %>%
+      st_as_sf()
+  })
+
   # 3. Datos para la SERIE (Agregados por Depto y Año)
   datos_serie <- reactive({
     req(input$filtro_formato_serie)
@@ -1229,7 +1301,7 @@ server <- function(input, output, session) {
 
   # Actualización reactiva eficiente mediante leafletProxy
   observe({
-    req(input$modo_vista %in% c("MAPA", "MAPA MUNICIPAL", "EXPEDIENTES"))
+    req(input$modo_vista %in% c("MAPA", "MAPA MUNICIPAL", "EXPEDIENTES", "POBLACION"))
     w_mapa$show()
 
     # Fallback de seguridad para ocultar el waiter
@@ -1237,11 +1309,14 @@ server <- function(input, output, session) {
 
     is_muni <- input$modo_vista == "MAPA MUNICIPAL"
     is_exp <- input$modo_vista == "EXPEDIENTES"
+    is_pob <- input$modo_vista == "POBLACION"
 
     if (is_muni) {
       d <- datos_municipios()
     } else if (is_exp) {
       d <- datos_expedientes()
+    } else if (is_pob) {
+      d <- datos_poblacion()
     } else {
       d <- datos_mapa()
     }
@@ -1250,7 +1325,7 @@ server <- function(input, output, session) {
     id_col <- if (is_muni) "Muni_Limpio" else "Depto_Limpio"
 
     col_motivo <- if (is_exp) "#bf360c" else colores_motivos[[input$filtro_motivo %||% "Todos los motivos"]]
-    fill_var <- if (is_exp) d$Pct_Exp else d$D_Tot
+    fill_var <- if (is_exp) d$Pct_Exp else if (is_pob) d$Tasa_Pob else d$D_Tot
     d <- d %>% mutate(FillVar = fill_var)
 
     d_centr <- d %>%
@@ -1275,6 +1350,8 @@ server <- function(input, output, session) {
         filter(!Depto_Limpio %in% c("MONTEVIDEO", "CANELONES", "MALDONADO"))
     } else if (is_exp) {
       d_depts_base <- d %>% mutate(D_Tot = Pct_Exp)
+    } else if (is_pob) {
+      d_depts_base <- d %>% mutate(D_Tot = Tasa_Pob)
     } else {
       d_depts_base <- d # Ya filtrado y simplificado en datos_mapa()
     }
@@ -1282,6 +1359,9 @@ server <- function(input, output, session) {
     # Paleta
     if (is_exp) {
       paleta_global <- colorNumeric(palette = c("#fff3e0", "#bf360c"), domain = c(0, 100), na.color = "#d9d9d9")
+    } else if (is_pob) {
+      max_global <- max(d$Tasa_Pob, na.rm = TRUE)
+      paleta_global <- colorNumeric(palette = c("#f2f4f7", col_motivo), domain = c(0, max_global + 0.1), na.color = "#d9d9d9")
     } else {
       max_global <- max(c(d$D_Tot, d_depts_base$D_Tot), na.rm = TRUE)
       paleta_global <- colorNumeric(palette = c("#f2f4f7", col_motivo), domain = c(0, max_global + 0.1), na.color = "#d9d9d9")
@@ -1324,7 +1404,7 @@ server <- function(input, output, session) {
         labelOptions = labelOptions(
           noHide = TRUE, textOnly = TRUE, direction = "center",
           style = list(
-            "color"       = if (is_exp) "#222222" else "#e67e22",
+            "color"       = if (is_exp) "#222222" else if (is_pob) "#222222" else "#e67e22",
             "font-weight" = "bold",
             "font-size"   = "15px",
             "text-shadow" = "1px 1px 1px white"
@@ -1363,6 +1443,11 @@ server <- function(input, output, session) {
       color  = "#bf360c",
       texto  = "Refleja el porcentaje de denuncias de cada departamento que tienen un n\u00famero de expediente asignado. Una cobertura alta indica mayor seguimiento administrativo. Solo se muestran los a\u00f1os con datos de expediente disponibles. *El registro del a\u00f1o 2019 se encuentra incompleto, y falta la informaci\u00f3n de diciembre de 2025.*"
     ),
+    POBLACION = list(
+      titulo = "Poblaci\u00f3n (Tasa)",
+      color  = "#2e7d32",
+      texto  = "Refleja la tasa de denuncias recibidas por cada 10.000 habitantes en cada departamento, seg\u00fan los datos del Censo INE 2023. Permite relativizar el n\u00famero de denuncias absolutas considerando el tama\u00f1o poblacional. *El registro del a\u00f1o 2019 se encuentra incompleto, y falta la informaci\u00f3n de diciembre de 2025.*"
+    ),
     SERIE = list(
       titulo = "Serie Hist\u00f3rica",
       color  = "#002D62",
@@ -1377,6 +1462,11 @@ server <- function(input, output, session) {
       titulo = "Composici\u00f3n",
       color  = "#002D62",
       texto  = "Muestra c\u00f3mo se distribuyen los motivos de denuncia a lo largo del tiempo. Con \u2018Todos los motivos\u2019 se visualizan las grandes categor\u00edas; al seleccionar un motivo espec\u00edfico, se despliegan sus sub-motivos internos. *El registro del a\u00f1o 2019 se encuentra incompleto, y falta la informaci\u00f3n de diciembre de 2025.*"
+    ),
+    DERIVACIONES = list(
+      titulo = "Derivaciones Administrativas",
+      color  = "#002D62",
+      texto  = "Visualiza el flujo de las denuncias que han sido derivadas desde el Ministerio de Ambiente hacia otros organismos p\u00fablicos. El grosor de cada conector refleja la proporci\u00f3n de denuncias remitidas a dicho destino."
     )
   )
 
@@ -1407,6 +1497,7 @@ server <- function(input, output, session) {
     hover_id <- rv$depto_hover
     is_muni <- input$modo_vista == "MAPA MUNICIPAL"
     is_exp <- input$modo_vista == "EXPEDIENTES"
+    is_pob <- input$modo_vista == "POBLACION"
 
     # Siempre usamos datos_mapa para el resumen nacional (es el más completo)
     d_nacional <- datos_mapa()
@@ -1463,6 +1554,59 @@ server <- function(input, output, session) {
       }
     }
     # ---- Fin bloque EXPEDIENTES ----
+
+    # ---- Bloque POBLACIÓN ----
+    if (is_pob) {
+      d_pob <- datos_poblacion()
+      col_motivo <- colores_motivos[[input$filtro_motivo %||% "Todos los motivos"]]
+      if (is.null(hover_id) || hover_id == "") {
+        # Resumen nacional de poblacion
+        d_tot_nac <- sum(d_pob$D_Tot, na.rm = TRUE)
+        pob_tot_nac <- sum(d_pob$Pob, na.rm = TRUE)
+        tasa_nac <- if (pob_tot_nac > 0) round((d_tot_nac / pob_tot_nac) * 10000, 2) else 0
+        ranking_pob <- d_pob %>%
+          st_drop_geometry() %>%
+          filter(D_Tot > 0) %>%
+          arrange(desc(Tasa_Pob)) %>%
+          head(10) %>%
+          mutate(HTML = paste0(
+            "<div style='font-size:13px; margin-bottom:4px; line-height:1.3;'>",
+            "<b style='color:#002D62;'>", Tasa_Pob, "</b> — ",
+            stringr::str_to_title(tolower(Depto_Limpio)), "</div>"
+          )) %>%
+          pull(HTML) %>%
+          paste(collapse = "")
+        return(HTML(paste0(
+          "<div style='background:white; border:2px solid #002D62; padding:15px; border-radius:10px; box-shadow:0 4px 12px rgba(0,0,0,0.1);'>",
+          "<h3 style='color:#002D62; margin-top:0;'>Resumen Nacional — Población</h3>",
+          "<div style='display:flex; justify-content:space-around; margin-bottom:15px; text-align:center;'>",
+          "<div><span style='font-size:0.8rem; color:#666;'>DENUNCIAS</span><br><b style='font-size:1.4rem;'>", d_tot_nac, "</b></div>",
+          "<div><span style='font-size:0.8rem; color:#002D62; font-weight:bold;'>TASA CADA 10K HAB.</span><br><b style='font-size:1.4rem; color:#002D62;'>", tasa_nac, "</b></div>",
+          "</div>",
+          "<hr style='margin:10px 0;'>",
+          "<div style='font-weight:bold; color:#555; margin-bottom:8px; font-size:0.9rem;'>Deptos. con mayor tasa (cada 10.000 hab):</div>",
+          ranking_pob, "</div>"
+        )))
+      } else {
+        d_hover <- d_pob %>% filter(Depto_Limpio == hover_id)
+        if (nrow(d_hover) == 0) {
+          return(NULL)
+        }
+        return(HTML(paste0(
+          "<div style='background:white; border:2px solid #002D62; padding:15px; border-radius:10px; box-shadow:0 4px 12px rgba(0,0,0,0.1);'>",
+          "<h3 style='color:#002D62; margin-top:0;'>", d_hover$Depto_Limpio, "</h3>",
+          "<div style='display:flex; justify-content:space-around; margin-bottom:15px; text-align:center;'>",
+          "<div><span style='font-size:0.8rem; color:#666;'>DENUNCIAS</span><br><b style='font-size:1.4rem;'>", d_hover$D_Tot, "</b></div>",
+          "<div><span style='font-size:0.8rem; color:#666;'>POBLACIÓN</span><br><b style='font-size:1.4rem;'>", format(d_hover$Pob, big.mark = ".", scientific = FALSE), "</b></div>",
+          "</div>",
+          "<div style='text-align:center; margin-bottom:10px;'>",
+          "<span style='font-size:0.8rem; color:#002D62; font-weight:bold;'>TASA CADA 10.000 HAB.</span><br><b style='font-size:1.8rem; color:#002D62;'>", d_hover$Tasa_Pob, "</b>",
+          "</div>",
+          "</div>"
+        )))
+      }
+    }
+    # ---- Fin bloque POBLACIÓN ----
 
     if (is.null(hover_id) || hover_id == "") {
       if (is_muni) {
@@ -1734,6 +1878,131 @@ server <- function(input, output, session) {
         opts_hover(css = "opacity:0.85;stroke:white;stroke-width:1px;")
       )
     )
+  })
+
+  # =========================================================
+  # DERIVACIONES - Sankey Network
+  # =========================================================
+  output$grafico_derivaciones <- networkD3::renderSankeyNetwork({
+    req(input$modo_vista == "DERIVACIONES")
+    w_derivaciones$show()
+    on.exit(w_derivaciones$hide(), add = TRUE)
+
+    # Utilizamos datos_filtrados_motivo para respetar el filtro de motivos
+    d <- datos_filtrados_motivo() %>%
+      filter(Anio >= as.character(input$filtro_anio_deriv[1]) & Anio <= as.character(input$filtro_anio_deriv[2]))
+
+    # Limpiamos y agrupamos la columna Derivacion
+    d_deriv <- d %>%
+      filter(!is.na(Derivacion) &
+        Derivacion != "" &
+        tolower(Derivacion) != "no registra" &
+        tolower(Derivacion) != "na" &
+        tolower(Derivacion) != "none") %>%
+      mutate(Target = stringr::str_to_upper(Derivacion)) %>%
+      group_by(Target) %>%
+      summarise(value = n(), .groups = "drop") %>%
+      filter(value > 0) %>%
+      arrange(desc(value))
+
+    # Limitar al TOP 20 y agrupar el resto en "OTROS"
+    if (nrow(d_deriv) > 20) {
+      top_20 <- d_deriv %>% slice_head(n = 20)
+      otros_valor <- sum(d_deriv$value[21:nrow(d_deriv)])
+      otros_df <- data.frame(Target = "OTROS", value = otros_valor)
+      d_deriv <- bind_rows(top_20, otros_df)
+    }
+
+    if (nrow(d_deriv) == 0) {
+      return(NULL)
+    }
+
+    links <- data.frame(
+      source = "MINISTERIO DE AMBIENTE",
+      target = d_deriv$Target,
+      value  = d_deriv$value
+    )
+
+    nodes <- data.frame(name = unique(c(links$source, links$target)))
+
+    # En networkD3 los links deben estar en index 0-based referenciando a los nodes
+    links$IDsource <- match(links$source, nodes$name) - 1
+    links$IDtarget <- match(links$target, nodes$name) - 1
+
+    sn <- networkD3::sankeyNetwork(
+      Links = links, Nodes = nodes,
+      Source = "IDsource", Target = "IDtarget", Value = "value",
+      NodeID = "name",
+      sinksRight = FALSE, margin = list(top = 10, bottom = 10, left = 20, right = 20),
+      nodeWidth = 25, fontSize = 14, nodePadding = 12,
+      iterations = 0
+    )
+
+    anio_rango <- if (input$filtro_anio_deriv[1] == input$filtro_anio_deriv[2]) {
+      as.character(input$filtro_anio_deriv[1])
+    } else {
+      paste0(input$filtro_anio_deriv[1], " - ", input$filtro_anio_deriv[2])
+    }
+    total_d <- sum(d_deriv$value)
+
+    js_code <- paste0("
+      function(el, x) {
+        // Deshabilitar el movimiento (drag) para que sea 100% estatico
+        d3.select(el).selectAll('.node').on('mousedown.drag', null);
+
+        // Remover los title nativos tipo SVG hover
+        d3.select(el).selectAll('title').remove();
+
+        // Crear contenedor HTML dinamico de tooltips si no existe ya
+        var tooltipDiv = d3.select('body').selectAll('.sankey-tooltip').data([0]);
+        tooltipDiv = tooltipDiv.enter().append('div')
+          .attr('class', 'sankey-tooltip')
+          .style('position', 'absolute')
+          .style('background', 'white')
+          .style('color', '#333')
+          .style('padding', '8px')
+          .style('border', '1px solid #777')
+          .style('border-radius', '4px')
+          .style('font-family', 'sans-serif')
+          .style('font-size', '13px')
+          .style('pointer-events', 'none')
+          .style('opacity', 0)
+          .style('box-shadow', '0 4px 8px rgba(0,0,0,0.1)')
+          .style('line-height', '1.4')
+          .style('z-index', 9999)
+          .merge(tooltipDiv);
+
+        var total = ", total_d, ";
+        var anios = '", anio_rango, "';
+
+        d3.select(el).selectAll('.link')
+          .on('mouseover', function(d) {
+             var pct = ((d.value / total) * 100).toFixed(1);
+             var html = '<b>' + d.target.name + '</b> (' + anios + ')<br>Denuncias: <b>' + d.value + '</b><br>Porcentaje: <b>' + pct + '%</b>';
+             tooltipDiv.html(html).style('opacity', 1);
+          })
+          .on('mousemove', function() {
+             // El uso de d3.event es el enfoque normal de d3.v4
+             tooltipDiv.style('left', (d3.event.pageX + 15) + 'px')
+                       .style('top', (d3.event.pageY - 15) + 'px');
+          })
+          .on('mouseout', function() { tooltipDiv.style('opacity', 0); });
+
+        d3.select(el).selectAll('.node')
+          .on('mouseover', function(d) {
+             var pct = ((d.value / total) * 100).toFixed(1);
+             var html = '<b>' + d.name + '</b> (' + anios + ')<br>Denuncias: <b>' + d.value + '</b><br>Porcentaje: <b>' + pct + '%</b>';
+             tooltipDiv.html(html).style('opacity', 1);
+          })
+          .on('mousemove', function() {
+             tooltipDiv.style('left', (d3.event.pageX + 15) + 'px')
+                       .style('top', (d3.event.pageY - 15) + 'px');
+          })
+          .on('mouseout', function() { tooltipDiv.style('opacity', 0); });
+      }
+    ")
+
+    htmlwidgets::onRender(sn, js_code)
   })
 
   # =========================================================
