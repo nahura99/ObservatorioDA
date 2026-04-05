@@ -200,27 +200,20 @@ ui <- page_fluid(
   useWaiter(),
   waiterShowOnLoad(
     html = tagList(
-      HTML('<svg width="120" height="120" viewBox="0 0 100 100" style="margin-bottom: 20px;">
-              <rect x="5" y="5" width="90" height="90" rx="22" fill="#1B4332" />
-              <path d="M25 50 H75 V80 H25 Z" fill="none" stroke="white" stroke-width="4" stroke-linejoin="round"/>
-              <path d="M25 50 L50 70 L75 50" fill="none" stroke="white" stroke-width="4" stroke-linejoin="round"/>
-              <path d="M50 50 L50 20" stroke="white" stroke-width="3" stroke-linecap="round" />
-              <path d="M50 20 L58 12 C 54 10, 46 10, 42 12 L50 20" fill="white" />
-              <path d="M50 28 L60 22 C 55 18, 50 18, 50 28" fill="white" />
-              <path d="M50 38 L62 34 C 58 30, 52 30, 50 38" fill="white" />
-              <path d="M50 28 L40 22 C 45 18, 50 18, 50 28" fill="white" />
-              <path d="M50 38 L38 34 C 42 30, 48 30, 50 38" fill="white" />
-            </svg>'),
+      HTML('<img src="logo_oda_v2.png" width="120" height="120" style="margin-bottom: 20px; border-radius: 15px;" />'),
       spin_3(),
       h4("Cargando Observatorio...", style = "color: #1B4332; margin-top: 15px; font-weight: bold;")
     ),
     color = "#F4FAF6"
   ),
   tags$head(
+    tags$title("Observatorio de Denuncias Ambientales"),
+    tags$link(rel = "icon", type = "image/png", href = "logo_oda_v2.png"),
     tags$link(rel = "stylesheet", href = "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"),
     tags$style(HTML(paste0("
     body, .content-wrapper, .right-side { background-color: #F4FAF6 !important; overflow-x: auto; }
-    .obs-title { font-weight: 900; letter-spacing: -0.5px; margin: 0 !important; font-size: 2.2rem; color: #1B4332; white-space: nowrap; line-height: 60px; display: flex; align-items: center; height: 60px; pointer-events: none; }
+    .obs-title { font-weight: 900; letter-spacing: -0.5px; margin: 0 !important; font-size: 2.2rem; color: #1B4332; white-space: nowrap; line-height: 60px; display: flex; align-items: center; height: 60px; pointer-events: auto; cursor: pointer; transition: text-decoration 0.2s; }
+    .obs-title:hover { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 6px; }
 
     /* Estilos Datatable Paginacion Minimalista */
     .dataTables_wrapper .pagination .page-link {
@@ -459,19 +452,10 @@ ui <- page_fluid(
       # Bloque Izquierdo: Logo + Título + Contacto (alineado con la columna del mapa)
       div(
         class = "header-left-block",
-        div(
-          style = "display: flex; align-items: center;",
-          HTML(paste0('<svg width="', TAMANIO_LOGO_ENCABEZADO, '" height="', TAMANIO_LOGO_ENCABEZADO, '" viewBox="0 0 100 100" style="margin-right: 15px;">
-                  <rect x="5" y="5" width="90" height="90" rx="22" fill="#1B4332" />
-                  <path d="M25 50 H75 V80 H25 Z" fill="none" stroke="white" stroke-width="4" stroke-linejoin="round"/>
-                  <path d="M25 50 L50 70 L75 50" fill="none" stroke="white" stroke-width="4" stroke-linejoin="round"/>
-                  <path d="M50 50 L50 20" stroke="white" stroke-width="3" stroke-linecap="round" />
-                  <path d="M50 20 L58 12 C 54 10, 46 10, 42 12 L50 20" fill="white" />
-                  <path d="M50 28 L60 22 C 55 18, 50 18, 50 28" fill="white" />
-                  <path d="M50 38 L62 34 C 58 30, 52 30, 50 38" fill="white" />
-                  <path d="M50 28 L40 22 C 45 18, 50 18, 50 28" fill="white" />
-                  <path d="M50 38 L38 34 C 42 30, 48 30, 50 38" fill="white" />
-                </svg>')),
+        a(
+          href = "javascript:location.reload();",
+          style = "text-decoration: none; display: flex; align-items: center;",
+          HTML(paste0('<img src="logo_oda_v2.png" width="', TAMANIO_LOGO_ENCABEZADO, '" height="', TAMANIO_LOGO_ENCABEZADO, '" style="margin-right: 15px; border-radius: 10px;" />')),
           h1("Observatorio de Denuncias Ambientales", class = "obs-title")
         ),
         div(
@@ -483,7 +467,7 @@ ui <- page_fluid(
           div(
             class = "contacto-popup", id = "popup_contacto",
             div(class = "contacto-close", id = "btn_cerrar_contacto", "✖"),
-            p(style = "margin: 0 0 10px 0; font-size: 0.9rem; color: #444;", "Por dudas, consultas o más información comunicarse con:"),
+            p(style = "margin: 0 0 10px 0; font-size: 0.9rem; color: #444;", "Por consultas, reporte de errores o más información comunicarse con:"),
             a(href = "mailto:nahuel.roel@cienciasociales.edu.uy", style = "font-weight: bold; color: #1B4332; word-wrap: break-word;", "nahuel.roel@cienciasociales.edu.uy"),
             hr(style = "margin: 10px 0;"),
             p(style = "margin: 0; font-size: 0.8rem; color: #777; font-style: italic;", "Desarrollado con R y Shiny")
@@ -1917,8 +1901,20 @@ server <- function(input, output, session) {
       return(NULL)
     }
 
+    # Determinar el nombre del origen segun el periodo (Cambio en Julio 2020)
+    anio_ini <- as.integer(input$filtro_anio_deriv[1])
+    anio_fin <- as.integer(input$filtro_anio_deriv[2])
+
+    source_label <- if (anio_fin < 2020) {
+      "DIRECCIÓN NACIONAL DE MEDIO AMBIENTE"
+    } else if (anio_ini > 2020) {
+      "MINISTERIO DE AMBIENTE"
+    } else {
+      "DIRECCIÓN NACIONAL DE MEDIO AMBIENTE / MINISTERIO DE AMBIENTE"
+    }
+
     links <- data.frame(
-      source = "MINISTERIO DE AMBIENTE",
+      source = source_label,
       target = d_deriv$Target,
       value  = d_deriv$value
     )
@@ -1952,6 +1948,26 @@ server <- function(input, output, session) {
 
         // Remover los title nativos tipo SVG hover
         d3.select(el).selectAll('title').remove();
+
+        // Salto de linea si existe ' / ' (Transicion 2020)
+        d3.select(el).selectAll('.node text')
+          .each(function(d) {
+             var textNode = d3.select(this);
+             var label = textNode.text();
+             if (label.indexOf(' / ') !== -1) {
+               var parts = label.split(' / ');
+               var x_coord = textNode.attr('x');
+               textNode.text(null);
+               textNode.append('tspan')
+                 .attr('x', x_coord)
+                 .attr('dy', '-0.6em')
+                 .text(parts[0] + ' /');
+               textNode.append('tspan')
+                 .attr('x', x_coord)
+                 .attr('dy', '1.2em')
+                 .text(parts[1]);
+             }
+          });
 
         // Crear contenedor HTML dinamico de tooltips si no existe ya
         var tooltipDiv = d3.select('body').selectAll('.sankey-tooltip').data([0]);
@@ -2030,10 +2046,17 @@ server <- function(input, output, session) {
           paste0("<a href='https://expediente.ute.com.uy/ConsultasWebMMA/' target='_blank' style='color: blue; text-decoration: underline;'>", Expediente, "</a>"),
           Expediente
         )
+      ) %>%
+      mutate(
+        Departamento = as.factor(Departamento),
+        Municipio = as.factor(Municipio),
+        `Motivo Agrupado` = as.factor(`Motivo Agrupado`),
+        `Derivación` = as.factor(`Derivación`)
       )
 
     DT::datatable(
       d,
+      filter = "top",
       selection = "none",
       escape = FALSE,
       options = list(
@@ -2048,7 +2071,12 @@ server <- function(input, output, session) {
           infoEmpty = "",
           infoFiltered = "",
           paginate = list(first = "<<", previous = "<", `next` = ">", last = ">>")
-        )
+        ),
+        initComplete = DT::JS("
+          function(settings, json) {
+            $(this.api().table().container()).find('thead select option:first-child').text('Filtrar..');
+          }
+        ")
       ),
       rownames = FALSE,
       style = "bootstrap"
