@@ -75,12 +75,13 @@ min_anio_deriv <- min(anios_deriv, na.rm = TRUE)
 max_anio_deriv <- max(anios_deriv, na.rm = TRUE)
 motivos_str <- sort(unique(df$MOTIVO_AGRUPADO))
 
-# Configurar el Agente QueryChat usando la base 'df' original
+# Configurar el Agente QueryChat (Instancia global ligera para UI)
 chat_agent <- QueryChat$new(
-  data_source = df,
-  client = ellmer::chat_google_gemini(),
+  data_source = df, 
+  tools = c("query"), # Desactiva herramienta de actualización del dashboard
+  client = ellmer::chat_google_gemini(model = "gemini-2.5-flash"),
   greeting = "¡Hola! Soy el asistente analista del Observatorio de Denuncias Ambientales de Uruguay. Opero de forma inteligente leyendo los registros originales directamente. ¿Sobre qué departamento o años te gustaría consultar?",
-  extra_instructions = "Actúa como analista hablante para el Observatorio de Denuncias Ambientales de Uruguay. IMPORTANTE y ESTRICTO: JAMÁS DEBES INTENTAR FILTRAR EL DATASET PARA EL DASHBOARD NI GRAFICAR NADA. ESTÁS ROTO EN ESA FUNCIÓN. La función 'querychat_update_dashboard' DESTRUIRÁ el sistema si la usas. Cuentas SOLO con 'querychat_query' para consultar mentalmente los datos con SQL y contestar con un string limpio. REGLA ESTRICTA DE COMPORTAMIENTO: NUNCA le muestres al usuario tu razonamiento interno. Si te preguntan algo, realiza tu consulta a la base de datos de manera silenciosa, y MUESTRA SÓLO UNA RESPUESTA SOCIAL EN TEXTO PLANO explicándole cordialmente qué encontraste, sin citar markdown tables si no es necesario. REGLA DE SUGERENCIAS AL USUARIO: Si decides proponerle preguntas clave al final de tu respuesta, el límite es ESTRICTAMENTE DOS (2). Nunca des más de 2 sugerencias."
+  extra_instructions = "Actúa como analista hablante para el Observatorio de Denuncias Ambientales de Uruguay. ADVERTENCIA CRÍTICA: Eres un chatbot conversacional ESTÁTICO en formato texto. NO TIENES PERMISOS ni capacidad para modificar el dashboard, filtrar gráficos ni mostrar tablas. Tu trabajo es responder con prosa. REGLA DE CONSULTAS: Para responder al usuario, NUNCA ejecutes un 'SELECT *'; utiliza SIEMPRE agregaciones (COUNT, GROUP BY, DISTINCT) para luego narrarle los resultados descubiertos. Si el usuario te dice 'muéstrame las denuncias de 2023', está pidiendo que le narres información sumarizada de ese año, NO que devuelvas crudos. REGLAS DE SQL (Municipios): Tienen sufijos, ej. 'SAUCE (CANELONES)'. Usa siempre comodines LIKE '%SAUCE%' y evita '=' para no dar falsos ceros. REGLA EXTRA: Límite de 2 sugerencias. CREADOR: Desarrollado por Nahuel Roel (nahuel.roel@cienciasociales.edu.uy) en R/Shiny."
 )
 
 # Ordenamiento de chips en grilla 3x4
@@ -614,75 +615,35 @@ ui <- page_fluid(
           ),
           tags$style("
             #contenedor_chat .chat-card { flex: 1 1 auto; overflow: hidden; min-height: 400px; display: flex; flex-direction: column; }
-            #contenedor_chat details { display: none !important; }
-            #contenedor_chat .chat-message-tool { display: none !important; }
             #contenedor_chat .bslib-card { border: none !important; box-shadow: none !important; }
+            /* Mostrar feedback visual de herramienta sin enseñar JSON/códigos internos */
+            #contenedor_chat details > summary { font-size: 0; color: transparent; list-style: none; }
+            #contenedor_chat details > summary::-webkit-details-marker { display: none; }
+            #contenedor_chat details > summary::before { 
+                content: 'Analizando base de datos...'; font-size: 13px; color: #777; display: inline-block; font-style: italic; 
+            }
+            #contenedor_chat details[open] > summary::before { content: 'Análisis completado.'; }
+            #contenedor_chat details > div, #contenedor_chat details > pre, #contenedor_chat details > code { display: none !important; }
+            #contenedor_chat .chat-message-tool { background: #fdfdfd; border-radius: 8px; padding: 2px 5px; margin: 5px 0; border: 1px dashed #e0e0e0; }
           "),
           tags$script("
-            setInterval(function() {
-              var inputs = document.querySelectorAll('#contenedor_chat textarea.chat-input, #contenedor_chat input[placeholder=\"Enter a message…\"]');
-              inputs.forEach(function(i) {
-                if(i.placeholder === 'Enter a message…' || i.placeholder === 'Enter a message...') {
-                   i.placeholder = 'Escribe tu duda o consulta...';
-                }
+            document.addEventListener('DOMContentLoaded', function() {
+              var observer = new MutationObserver(function(mutations) {
+                mutations.forEach(function(mutation) {
+                  if (mutation.addedNodes.length || mutation.type === 'childList') {
+                    var inputs = document.querySelectorAll('#contenedor_chat textarea.chat-input, #contenedor_chat input[placeholder=\"Enter a message…\"]');
+                    inputs.forEach(function(i) {
+                      if(i.placeholder === 'Enter a message…' || i.placeholder === 'Enter a message...') {
+                         i.placeholder = 'Escribe tu duda o consulta...';
+                      }
+                    });
+                  }
+                });
               });
-            }, 800);
-
-            // --- REGISTRO DE PREGUNTAS DEL USUARIO (AUDITORÍA INFALIBLE) ---
-            // Interceptamos las preguntas al vuelo para registrar lo que el público le dice a la IA,
-            // dejándole al usuario realizar consultas infinitas sin restricciones ni bloqueos.
-            $(document).on('shiny:connected', function() {
-               var oldSetInput = Shiny.setInputValue;
-               Shiny.setInputValue = function(name, value, opts) {
-                  // Cuando bslib transmite exactamente el mensaje del usuario hacia el servidor...
-                  if (typeof name === 'string' && name.indexOf('chat') !== -1 && name.indexOf('user_input') !== -1) {
-                     if (typeof value === 'string' && value.trim() !== '') {
-                        // Duplicamos el mensaje a un canal de entrada secundario silencioso en R
-                        // etiquetado exclusivamente para poder guardar un audiolibro de las preguntas en la base.
-                        oldSetInput.call(Shiny, 'registro_auditoria_chat', value, opts);
-                     }
-                  }
-                  // Entregar el marco de datos inmaculado para que el Chat fluya nativamente
-                  oldSetInput.call(Shiny, name, value, opts);
-               };
-            });
-
-            // --- DETECCIÓN DE TIMEOUT / RATE LIMIT Y ADVERTENCIA AL USUARIO ---
-            var chatDelayTimer = null;
-            function clearDelayWarning() {
-               clearTimeout(chatDelayTimer);
-               var w = document.getElementById('chat-delay-warning');
-               if(w) w.remove();
-            }
-            $(document).on('shiny:busy', function() {
-               clearDelayWarning();
-               chatDelayTimer = setTimeout(function() {
-                  var c = document.getElementById('contenedor_chat');
-                  if (c && c.style.display !== 'none') {
-                     var chatCont = document.querySelector('#chat');
-                     if (chatCont && !document.getElementById('chat-delay-warning')) {
-                        var warn = document.createElement('div');
-                        warn.id = 'chat-delay-warning';
-                        warn.style.fontSize = '0.75rem';
-                        warn.style.color = '#fff';
-                        warn.style.backgroundColor = '#d35400';
-                        warn.style.padding = '8px 12px';
-                        warn.style.borderRadius = '5px';
-                        warn.style.margin = '10px 15px';
-                        warn.style.textAlign = 'center';
-                        warn.style.boxShadow = '0 2px 5px rgba(0,0,0,0.2)';
-                        warn.innerHTML = '<i class=\"fa-solid fa-clock\" style=\"margin-right:5px;\"></i> <b>El servidor de IA está demorando o en cola.</b><br>Por favor, espera unos segundos más, o <b>enviá otra pregunta</b> para destrabarlo y cancelar la anterior.';
-
-                        var mb = chatCont.shadowRoot ? chatCont.shadowRoot.querySelector('.messages') : chatCont.querySelector('.messages');
-                        var target = mb || chatCont;
-                        target.appendChild(warn);
-                        if(target.scrollTop !== undefined) target.scrollTop = target.scrollHeight;
-                     }
-                  }
-               }, 14000); // Aparece si R pasa 14 segundos consecutivos ocupado
-            });
-            $(document).on('shiny:idle', function() {
-               clearDelayWarning();
+              var chatContainer = document.getElementById('contenedor_chat');
+              if(chatContainer) {
+                 observer.observe(chatContainer, { childList: true, subtree: true });
+              }
             });
           "),
           chat_agent$ui(id = "chat")
@@ -2090,9 +2051,10 @@ server <- function(input, output, session) {
   # instancia y no compartan el historial ni se trabe el saludo inicial.
   chat_agent_session <- QueryChat$new(
     data_source = df,
-    client = ellmer::chat_google_gemini(),
+    tools = c("query"), # Desactiva herramienta de actualización del dashboard
+    client = ellmer::chat_google_gemini(model = "gemini-2.5-flash"),
     greeting = "¡Hola! Soy el asistente analista del Observatorio de Denuncias Ambientales de Uruguay. Opero de forma inteligente leyendo los registros originales directamente. ¿Sobre qué departamento o años te gustaría consultar?",
-    extra_instructions = "Actúa como analista hablante para el Observatorio de Denuncias Ambientales de Uruguay. IMPORTANTE y ESTRICTO: JAMÁS DEBES INTENTAR FILTRAR EL DATASET PARA EL DASHBOARD NI GRAFICAR NADA. ESTÁS ROTO EN ESA FUNCIÓN. La función 'querychat_update_dashboard' DESTRUIRÁ el sistema si la usas. Cuentas SOLO con 'querychat_query' para consultar mentalmente los datos con SQL y contestar con un string limpio. REGLA ESTRICTA DE COMPORTAMIENTO: NUNCA le muestres al usuario tu razonamiento interno. Si te preguntan algo, realiza tu consulta a la base de datos de manera silenciosa, y MUESTRA SÓLO UNA RESPUESTA SOCIAL EN TEXTO PLANO explicándole cordialmente qué encontraste, sin citar markdown tables si no es necesario. REGLA DE SUGERENCIAS AL USUARIO: Si decides proponerle preguntas clave al final de tu respuesta, el límite es ESTRICTAMENTE DOS (2). Nunca des más de 2 sugerencias."
+    extra_instructions = "Actúa como analista hablante para el Observatorio de Denuncias Ambientales de Uruguay. ADVERTENCIA CRÍTICA: Eres un chatbot conversacional ESTÁTICO en formato texto. NO TIENES PERMISOS ni capacidad para modificar el dashboard, filtrar gráficos ni mostrar tablas. Tu trabajo es responder con prosa. REGLA DE CONSULTAS: Para responder al usuario, NUNCA ejecutes un 'SELECT *'; utiliza SIEMPRE agregaciones (COUNT, GROUP BY, DISTINCT) para luego narrarle los resultados descubiertos. Si el usuario te dice 'muéstrame las denuncias de 2023', está pidiendo que le narres información sumarizada de ese año, NO que devuelvas crudos. REGLAS DE SQL (Municipios): Tienen sufijos, ej. 'SAUCE (CANELONES)'. Usa siempre comodines LIKE '%SAUCE%' y evita '=' para no dar falsos ceros. REGLA EXTRA: Límite de 2 sugerencias. CREADOR: Desarrollado por Nahuel Roel (nahuel.roel@cienciasociales.edu.uy) en R/Shiny."
   )
 
   chat_state <- chat_agent_session$server(id = "chat")
@@ -2121,21 +2083,5 @@ server <- function(input, output, session) {
       )
   })
 
-  # =========================================================
-  # GUARDADO DE PREGUNTAS DEL USUARIO (AUDITORÍA SHINYAPPS)
-  # =========================================================
-  observeEvent(input$registro_auditoria_chat,
-    {
-      pregunta <- isolate(input$registro_auditoria_chat)
-      if (is.character(pregunta) && nchar(trimws(pregunta)) > 0) {
-        hora_actual <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
-        # ESTE MENSAJE SE GUARDA DIRECTAMENTE EN LOS REGISTROS (LOGS) DE SHINYAPPS.IO
-        # Al ingresar a la pestaña "Logs" en el panel de control de posit, vas a tener
-        # un registro ordenado por fecha de texto claro para auditorías.
-        cat(sprintf("\n[AUDITORIA_CHAT_BOT] [%s] Pregunta recibida: %s\n", hora_actual, pregunta), file = stderr())
-      }
-    },
-    ignoreInit = TRUE
-  )
 }
 shinyApp(ui = ui, server = server)
