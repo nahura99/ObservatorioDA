@@ -77,7 +77,7 @@ motivos_str <- sort(unique(df$MOTIVO_AGRUPADO))
 
 # Configurar el Agente QueryChat (Instancia global ligera para UI)
 chat_agent <- QueryChat$new(
-  data_source = df, 
+  data_source = df,
   tools = c("query"), # Desactiva herramienta de actualización del dashboard
   client = ellmer::chat_google_gemini(model = "gemini-2.5-flash"),
   greeting = "¡Hola! Soy el asistente analista del Observatorio de Denuncias Ambientales de Uruguay. Opero de forma inteligente leyendo los registros originales directamente. ¿Sobre qué departamento o años te gustaría consultar?",
@@ -619,8 +619,8 @@ ui <- page_fluid(
             /* Mostrar feedback visual de herramienta sin enseñar JSON/códigos internos */
             #contenedor_chat details > summary { font-size: 0; color: transparent; list-style: none; }
             #contenedor_chat details > summary::-webkit-details-marker { display: none; }
-            #contenedor_chat details > summary::before { 
-                content: 'Analizando base de datos...'; font-size: 13px; color: #777; display: inline-block; font-style: italic; 
+            #contenedor_chat details > summary::before {
+                content: 'Analizando base de datos...'; font-size: 13px; color: #777; display: inline-block; font-style: italic;
             }
             #contenedor_chat details[open] > summary::before { content: 'Análisis completado.'; }
             #contenedor_chat details > div, #contenedor_chat details > pre, #contenedor_chat details > code { display: none !important; }
