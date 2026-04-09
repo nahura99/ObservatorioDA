@@ -3,7 +3,7 @@
 ################################################################################
 
 # Cargar librerías necesarias
-packages <- c("shiny", "bslib", "shinyWidgets", "ggplot2", "sf", "dplyr", "stringr", "lubridate", "ggiraph", "shinycssloaders", "leaflet", "shinyjs", "htmlwidgets", "waiter", "ggrepel", "tidyr", "DT", "httr", "jsonlite", "querychat", "ellmer", "duckdb", "networkD3")
+packages <- c("shiny", "bslib", "shinyWidgets", "ggplot2", "sf", "dplyr", "stringr", "lubridate", "ggiraph", "shinycssloaders", "leaflet", "shinyjs", "htmlwidgets", "waiter", "ggrepel", "tidyr", "DT", "httr", "jsonlite", "querychat", "ellmer", "duckdb", "networkD3", "shinylogs", "googledrive", "gargle")
 for (p in packages) {
   if (!requireNamespace(p, quietly = TRUE)) install.packages(p, repos = "https://cloud.r-project.org", quiet = TRUE)
 }
@@ -40,7 +40,21 @@ suppressPackageStartupMessages({
   library(ellmer)
   library(duckdb)
   library(networkD3)
+  library(shinylogs)
+  library(googledrive)
 })
+
+# Autenticación silente para Google Drive (Telemetría)
+options(gargle_oauth_cache = ".secrets")
+options(gargle_oauth_email = TRUE)
+tryCatch(
+  {
+    googledrive::drive_auth(cache = ".secrets", email = TRUE)
+  },
+  error = function(e) {
+    warning("No se encontró el token de Google Drive. Por favor, ejecuta setup_gdrive.R o actívalo manualmente.")
+  }
+)
 
 # Helper para el cargador original (UX revertida a solicitud del usuario)
 make_waiter_html <- function(pct = 0, text = NULL) {
@@ -199,6 +213,7 @@ ui <- page_fluid(
   theme = bs_theme(version = 5, preset = "lumen"),
   useShinyjs(),
   useWaiter(),
+  shinylogs::use_tracking(),
   waiterShowOnLoad(
     html = tagList(
       HTML('<img src="logo_oda_v2.png" width="120" height="120" style="margin-bottom: 20px; border-radius: 15px;" />'),
@@ -696,6 +711,12 @@ ui <- page_fluid(
 # 3. LÓGICA DEL SERVIDOR
 # ==========================================
 server <- function(input, output, session) {
+  # Configurar telemetría silenciosa enfocada en burbujas y filtros (Guardado en Drive)
+  track_usage(
+    storage_mode = store_googledrive(path = "Telemetria_ODA"),
+    what = c("session", "inputs", "errors")
+  )
+
   # Reinicio forzado del chat
   observeEvent(input$btn_reiniciar_chat, {
     session$reload()
@@ -2082,6 +2103,5 @@ server <- function(input, output, session) {
         zoom = input$mapa_interactivo_zoom - 1
       )
   })
-
 }
 shinyApp(ui = ui, server = server)
