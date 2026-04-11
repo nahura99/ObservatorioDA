@@ -40,21 +40,21 @@ suppressPackageStartupMessages({
   library(ellmer)
   library(duckdb)
   library(networkD3)
-  library(shinylogs)
-  library(googledrive)
+  # library(shinylogs)
+  # library(googledrive)
 })
 
 # Autenticación silente para Google Drive (Telemetría)
-options(gargle_oauth_cache = ".secrets")
-options(gargle_oauth_email = TRUE)
-tryCatch(
-  {
-    googledrive::drive_auth(cache = ".secrets", email = TRUE)
-  },
-  error = function(e) {
-    warning("No se encontró el token de Google Drive. Por favor, ejecuta setup_gdrive.R o actívalo manualmente.")
-  }
-)
+# options(gargle_oauth_cache = ".secrets")
+# options(gargle_oauth_email = TRUE)
+# tryCatch(
+#   {
+#     googledrive::drive_auth(cache = ".secrets", email = TRUE)
+#   },
+#   error = function(e) {
+#     warning("No se encontró el token de Google Drive. Por favor, ejecuta setup_gdrive.R o actívalo manualmente.")
+#   }
+# )
 
 # Helper para el cargador original (UX revertida a solicitud del usuario)
 make_waiter_html <- function(pct = 0, text = NULL) {
@@ -213,7 +213,7 @@ ui <- page_fluid(
   theme = bs_theme(version = 5, preset = "lumen"),
   useShinyjs(),
   useWaiter(),
-  shinylogs::use_tracking(),
+  # shinylogs::use_tracking(),
   waiterShowOnLoad(
     html = tagList(
       HTML('<img src="logo_oda_v2.png" width="120" height="120" style="margin-bottom: 20px; border-radius: 15px;" />'),
@@ -712,10 +712,10 @@ ui <- page_fluid(
 # ==========================================
 server <- function(input, output, session) {
   # Configurar telemetría silenciosa enfocada en burbujas y filtros (Guardado en Drive)
-  track_usage(
-    storage_mode = store_googledrive(path = "Telemetria_ODA"),
-    what = c("session", "inputs", "errors")
-  )
+  # track_usage(
+  #   storage_mode = store_googledrive(path = "Telemetria_ODA"),
+  #   what = c("session", "inputs", "errors")
+  # )
 
   # Reinicio forzado del chat
   observeEvent(input$btn_reiniciar_chat, {
@@ -784,18 +784,23 @@ server <- function(input, output, session) {
   w_tabla <- Waiter$new(id = "tabla_denuncias", html = make_waiter_html(), color = "rgba(255,255,255,0.85)")
 
   # Valores reactivos para estado de hover
-  rv <- reactiveValues(depto_hover = NULL)
+  rv <- reactiveValues(raw_hover = NULL)
+
+  # Creamos un reactivo con debounce (retraso) para ignorar los movimientos ultra rápidos
+  hover_reactivo <- debounce(reactive({
+    rv$raw_hover
+  }), 100) # 100ms de espera
 
   observeEvent(input$mapa_interactivo_shape_mouseover, {
     new_id <- input$mapa_interactivo_shape_mouseover$id
 
     if (!is.null(new_id)) {
       if (new_id == "EXTERIOR") {
-        rv$depto_hover <- NULL
+        rv$raw_hover <- NULL
       } else {
         # Ahora permitimos todos los IDs (Departamentos o Municipios)
         # Si el ID es el especial de Montevideo en modo municipal, mapearlo a MONTEVIDEO para el panel
-        rv$depto_hover <- if (new_id == "MONTEVIDEO_MUNI") "MONTEVIDEO" else new_id
+        rv$raw_hover <- if (new_id == "MONTEVIDEO_MUNI") "MONTEVIDEO" else new_id
       }
     }
   })
@@ -1460,24 +1465,23 @@ server <- function(input, output, session) {
   })
 
   output$panel_hover_info <- renderUI({
-    hover_id <- rv$depto_hover
+    hover_id <- hover_reactivo()
     is_muni <- input$modo_vista == "MAPA MUNICIPAL"
     is_exp <- input$modo_vista == "EXPEDIENTES"
     is_pob <- input$modo_vista == "POBLACION"
 
     # Siempre usamos datos_mapa para el resumen nacional (es el más completo)
-    d_nacional <- datos_mapa()
+    d_nacional <- datos_mapa() %>% st_drop_geometry()
 
     # ---- Bloque EXPEDIENTES ----
     if (is_exp) {
-      d_exp <- datos_expedientes()
+      d_exp <- datos_expedientes() %>% st_drop_geometry()
       if (is.null(hover_id) || hover_id == "") {
         # Resumen nacional de expedientes
         d_tot_nac <- sum(d_exp$D_Tot, na.rm = TRUE)
         e_tot_nac <- sum(d_exp$E_Tot, na.rm = TRUE)
         pct_nac <- if (d_tot_nac > 0) round((e_tot_nac / d_tot_nac) * 100, 1) else 0
         ranking_exp <- d_exp %>%
-          st_drop_geometry() %>%
           filter(D_Tot > 0) %>%
           arrange(desc(Pct_Exp)) %>%
           head(10) %>%
@@ -1523,7 +1527,7 @@ server <- function(input, output, session) {
 
     # ---- Bloque POBLACIÓN ----
     if (is_pob) {
-      d_pob <- datos_poblacion()
+      d_pob <- datos_poblacion() %>% st_drop_geometry()
       col_motivo <- colores_motivos[[input$filtro_motivo %||% "Todos los motivos"]]
       if (is.null(hover_id) || hover_id == "") {
         # Resumen nacional de poblacion
@@ -1531,7 +1535,6 @@ server <- function(input, output, session) {
         pob_tot_nac <- sum(d_pob$Pob, na.rm = TRUE)
         tasa_nac <- if (pob_tot_nac > 0) round((d_tot_nac / pob_tot_nac) * 10000, 2) else 0
         ranking_pob <- d_pob %>%
-          st_drop_geometry() %>%
           filter(D_Tot > 0) %>%
           arrange(desc(Tasa_Pob)) %>%
           head(10) %>%
@@ -1619,7 +1622,7 @@ server <- function(input, output, session) {
     # Buscar datos específicos del territorio bajo el mouse
     if (is_muni) {
       # 1. Intentar Municipio
-      d_muni <- datos_municipios()
+      d_muni <- datos_municipios() %>% st_drop_geometry()
       d_hover <- d_muni %>% filter(Muni_Limpio == hover_id)
 
       if (nrow(d_hover) > 0) {
