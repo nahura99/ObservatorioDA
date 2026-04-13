@@ -3,9 +3,13 @@
 ################################################################################
 
 # Cargar librerías necesarias
-packages <- c("shiny", "bslib", "shinyWidgets", "ggplot2", "sf", "dplyr", "stringr", "lubridate", "ggiraph", "shinycssloaders", "leaflet", "shinyjs", "htmlwidgets", "waiter", "ggrepel", "tidyr", "DT", "httr", "jsonlite", "querychat", "ellmer", "duckdb", "networkD3", "shinylogs", "googledrive", "gargle")
-for (p in packages) {
-  if (!requireNamespace(p, quietly = TRUE)) install.packages(p, repos = "https://cloud.r-project.org", quiet = TRUE)
+# Nota: en shinyapps.io los paquetes se instalan en deploy, no en cada inicio.
+# El loop de instalación se omite para acelerar el startup.
+if (!nzchar(Sys.getenv("R_CONFIG_ACTIVE", "")) && !nzchar(Sys.getenv("SHINY_PORT", ""))) {
+  packages <- c("shiny", "bslib", "shinyWidgets", "ggplot2", "sf", "dplyr", "stringr", "lubridate", "ggiraph", "shinycssloaders", "leaflet", "shinyjs", "htmlwidgets", "waiter", "ggrepel", "tidyr", "DT", "httr", "jsonlite", "querychat", "ellmer", "duckdb", "networkD3", "shinylogs", "googledrive", "gargle")
+  for (p in packages) {
+    if (!requireNamespace(p, quietly = TRUE)) install.packages(p, repos = "https://cloud.r-project.org", quiet = TRUE)
+  }
 }
 options(shiny.maxRequestSize = 30 * 1024^2)
 options(shiny.proxy.address.forwarding = TRUE)
@@ -89,13 +93,20 @@ min_anio_deriv <- min(anios_deriv, na.rm = TRUE)
 max_anio_deriv <- max(anios_deriv, na.rm = TRUE)
 motivos_str <- sort(unique(df$MOTIVO_AGRUPADO))
 
-# Configurar el Agente QueryChat (Instancia global ligera para UI)
-chat_agent <- QueryChat$new(
-  data_source = df,
-  tools = c("query"), # Desactiva herramienta de actualización del dashboard
-  client = ellmer::chat_google_gemini(model = "gemini-2.5-flash"),
-  greeting = "¡Hola! Soy el asistente analista del Observatorio de Denuncias Ambientales de Uruguay. Opero de forma inteligente leyendo los registros originales directamente. ¿Sobre qué departamento o años te gustaría consultar?",
-  extra_instructions = "Actúa como analista hablante para el Observatorio de Denuncias Ambientales de Uruguay. ADVERTENCIA CRÍTICA: Eres un chatbot conversacional ESTÁTICO en formato texto. NO TIENES PERMISOS ni capacidad para modificar el dashboard, filtrar gráficos ni mostrar tablas. Tu trabajo es responder con prosa. REGLA DE CONSULTAS: Para responder al usuario, NUNCA ejecutes un 'SELECT *'; utiliza SIEMPRE agregaciones (COUNT, GROUP BY, DISTINCT) para luego narrarle los resultados descubiertos. Si el usuario te dice 'muéstrame las denuncias de 2023', está pidiendo que le narres información sumarizada de ese año, NO que devuelvas crudos. REGLAS DE SQL (Municipios): Tienen sufijos, ej. 'SAUCE (CANELONES)'. Usa siempre comodines LIKE '%SAUCE%' y evita '=' para no dar falsos ceros. REGLA EXTRA: Límite de 2 sugerencias. CREADOR: Desarrollado por Nahuel Roel (nahuel.roel@cienciasociales.edu.uy) en R/Shiny."
+# Configurar el Agente QueryChat (Instancia global SOLO para UI — sin conexión API)
+# La conexión real con Gemini se hace por sesión en el server, no aquí.
+chat_agent <- tryCatch(
+  QueryChat$new(
+    data_source = df,
+    tools = c("query"),
+    client = ellmer::chat_google_gemini(model = "gemini-2.5-flash"),
+    greeting = "¡Hola! Soy el asistente analista del Observatorio de Denuncias Ambientales de Uruguay. Opero de forma inteligente leyendo los registros originales directamente. ¿Sobre qué departamento o años te gustaría consultar?",
+    extra_instructions = "Responde en español."
+  ),
+  error = function(e) {
+    message("QueryChat global init falló (se reintentará por sesión): ", e$message)
+    NULL
+  }
 )
 
 # Ordenamiento de chips en grilla 3x4
@@ -661,7 +672,7 @@ ui <- page_fluid(
               }
             });
           "),
-          chat_agent$ui(id = "chat")
+          if (!is.null(chat_agent)) chat_agent$ui(id = "chat") else div("Chat no disponible")
         )),
         # --- FILTRO DEPARTAMENTOS: SERIE ---
         shinyjs::hidden(div(
